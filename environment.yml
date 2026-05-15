@@ -1,0 +1,13 @@
+name: fair-rcmip3
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python
+  - jupyter
+  - jupytext
+  - matplotlib
+  - netCDF4
+  - numpy
+  - pandas
+  - xarray
