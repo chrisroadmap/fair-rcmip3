@@ -1,3 +1,7 @@
+# large datafiles
+*.zip
+data/RCMIP3_protocol*
+
 # Notebooks
 *.ipynb
 
