@@ -1,6 +1,7 @@
 # large datafiles
 *.zip
 data/v?.?.?
+output/native
 
 # Notebooks
 *.ipynb
