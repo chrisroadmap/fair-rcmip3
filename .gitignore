@@ -3,6 +3,9 @@
 data/v?.?.?
 output/native
 
+# working files
+data/fair_calibration/v1.6.1/species_configs_properties_master_notcommited.csv
+
 # Notebooks
 *.ipynb
 
