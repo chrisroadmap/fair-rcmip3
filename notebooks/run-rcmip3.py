@@ -5,7 +5,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.2
+#       jupytext_version: 1.19.3
 #   kernelspec:
 #     display_name: Python 3 (ipykernel)
 #     language: python
@@ -27,6 +27,7 @@ import xarray as xr
 from fair import FAIR
 from fair.interface import fill, initialise
 from fair.io import read_properties
+from tqdm.auto import tqdm
 
 # %%
 # setup
@@ -63,13 +64,11 @@ temp_dict["AFOLU"] = "CO2 AFOLU"
 RCMIP3_LOOKUP = {value: key for key, value in temp_dict.items()}
 
 # %%
-#RCMIP3_LOOKUP
-
-# %%
 # unit dedafter
 DEDAFTER = {specie: 1 for specie in RCMIP3_LOOKUP}
 DEDAFTER["CO2 FFI"] = 0.001
 DEDAFTER["CO2 AFOLU"] = 0.001
+DEDAFTER["CO2"] = 0.001
 DEDAFTER["N2O"] = 0.001
 
 # %% [markdown]
@@ -351,120 +350,108 @@ pl.hist(cumulative_emissions_1pctco2.sel(timebounds=1990, scenario=scenario)/3.6
 pl.plot(f.temperature.sel(layer=0, scenario=scenario));
 
 # %% [markdown]
-# ### 1pctCO2 sub-experiment
+# ### esm-1pctCO2-brch-* sub-experiments
 #
-# We need to save out the state of every fair ensemble member upon hitting 1000 PgC as a restart for the branch experiments.
+# We need to save out the state of every fair ensemble member upon hitting 750, 1000 or 2000 PgC as a restart for the branch experiments.
 #
-# So redo the run, 1 year at a time, checking to see if it exceeds 1000 PgC.
+# So redo the run, 1 year at a time, checking to see if it exceeds 750, 1000 or 2000 PgC.
 
 # %%
+emissions_levels = [750, 1000, 2000]
 f_iter = {}
 gasbox_restarts = {}
 temperature_restarts = {}
+concentration_restarts = {}
 forcing_restarts = {}
 airborne_restarts = {}
 cumulative_restarts = {}
 alpha_restarts = {}
 
 # %%
-hit1000_df = pd.Series([False]*len(valid_all), index=valid_all)
-hit1000_df
+for cum_emis in emissions_levels:
+    gasbox_restarts[cum_emis] = {}
+    temperature_restarts[cum_emis] = {}
+    concentration_restarts[cum_emis] = {}
+    forcing_restarts[cum_emis] = {}
+    airborne_restarts[cum_emis] = {}
+    cumulative_restarts[cum_emis] = {}
+    alpha_restarts[cum_emis] = {}
 
 # %%
-# set up a dummy fair run for the purposes of using the structure for year[0]
-f_iter[1849] = FAIR()
-f_iter[1849].define_time(1849, 1850, 1)
-f_iter[1849].define_scenarios(scenarios)
-f_iter[1849].define_species(species, properties)
-f_iter[1849].define_configs(valid_all)
-f_iter[1849].allocate()
-fill(f_iter[1849].forcing, 0)
-fill(f_iter[1849].temperature, 0)
-fill(f_iter[1849].airborne_emissions, 0)
-fill(f_iter[1849].cumulative_emissions, 0)
-fill(f_iter[1849].alpha_lifetime, 1)
+hit_cum_emis_df = {}
+for cum_emis in emissions_levels:
+    hit_cum_emis_df[cum_emis] = pd.Series([False]*len(valid_all), index=valid_all)
 
 # %%
-### START HERE NEXT TIME
+# set up a dummy fair runs for the purposes of using the structure for year[0]
+for cum_emis in emissions_levels:
+    f_iter[1849] = FAIR()
+    f_iter[1849].define_time(1849, 1850, 1)
+    f_iter[1849].define_scenarios(scenarios)
+    f_iter[1849].define_species(species, properties)
+    f_iter[1849].define_configs(valid_all)
+    f_iter[1849].allocate()
+    fill(f_iter[1849].forcing, 0)
+    fill(f_iter[1849].temperature, 0)
+    fill(f_iter[1849].airborne_emissions, 0)
+    fill(f_iter[1849].cumulative_emissions, 0)
+    fill(f_iter[1849].alpha_lifetime, 1)
 
-for year in tqdm(range(140)):
+# %%
+for year in tqdm(range(1850, 1990)):
     f_iter[year] = FAIR()
-    f_iter[cal][year].define_time(year, year+1, 1)
-        f_iter[cal][year].define_scenarios(scenarios)
-        f_iter[cal][year].define_species(species, properties)
-        f_iter[cal][year].define_configs(list(cal_df[cal].index))
-        f_iter[cal][year].allocate()
+    f_iter[year].define_time(year, year+1, 1)
+    f_iter[year].define_scenarios(scenarios)
+    f_iter[year].define_species(species, properties)
+    f_iter[year].define_configs(valid_all)
+    f_iter[year].allocate()
+
+    for specie in f_iter[year].species:
+        f_iter[year].concentration.loc[
+            dict(
+                timebounds=np.arange(year, year+2), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_concentrations.loc[
+            (master_concentrations["Scenario"]==exp_conc) & (master_concentrations["Variable"].str.endswith(f"|{specie}")),
+            str(year):str(year+1)
+        ].T
     
-        f_iter[cal][year].concentration.loc[dict(specie='CO2')] = conc_df.values[year:year+2,None]
-        f_iter[cal][year].concentration.loc[dict(specie='CH4')] = 808.2490285
-        f_iter[cal][year].concentration.loc[dict(specie='N2O')] = 273.021047
-        
-        # Get default species configs
-        f_iter[cal][year].fill_species_configs()
-        
-        # climate response
-        fill(f_iter[cal][year].climate_configs["ocean_heat_capacity"], cal_df[cal].loc[:, "clim_c1":"clim_c3"].values)
-        fill(
-            f_iter[cal][year].climate_configs["ocean_heat_transfer"],
-            cal_df[cal].loc[:, "clim_kappa1":"clim_kappa3"].values,
-        )
-        fill(f_iter[cal][year].climate_configs["deep_ocean_efficacy"], cal_df[cal].loc[:, "clim_epsilon"])
-        fill(f_iter[cal][year].climate_configs["gamma_autocorrelation"], cal_df[cal].loc[:, "clim_gamma"])
-        fill(f_iter[cal][year].climate_configs["sigma_eta"], cal_df[cal].loc[:, "clim_sigma_eta"])
-        fill(f_iter[cal][year].climate_configs["sigma_xi"], cal_df[cal].loc[:, "clim_sigma_xi"])
-        fill(f_iter[cal][year].climate_configs["seed"], cal_df[cal].loc[:, "seed"])
-        fill(f_iter[cal][year].climate_configs["stochastic_run"], False)
-        fill(f_iter[cal][year].climate_configs["use_seed"], True)
-        fill(f_iter[cal][year].climate_configs["forcing_4co2"], cal_df[cal].loc[:, "clim_F_4xCO2"])
+    f_iter[year].fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+    f_iter[year].override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
     
-        # carbon cycle
-        fill(f_iter[cal][year].species_configs["iirf_0"], cal_df[cal].loc[:,"cc_r0"], specie="CO2")
-        fill(
-            f_iter[cal][year].species_configs["iirf_airborne"], cal_df[cal].loc[:,"cc_rA"], specie="CO2"
-        )
-        fill(f_iter[cal][year].species_configs["iirf_uptake"], cal_df[cal].loc[:,"cc_rU"], specie="CO2")
-        fill(
-            f_iter[cal][year].species_configs["iirf_temperature"],
-            cal_df[cal].loc[:,"cc_rT"],
-            specie="CO2",
-        )
+    # this needs to be undone from the override
+    f_iter[year].species_configs["baseline_concentration"].loc[dict(specie="CO2")] = (
+        df_defaults.loc[(df_defaults["name"]=="CO2"), "baseline_concentration"].values[0]
+    )
+
+    # also turn off stochasticity because we are running one year at a time
+    fill(f_iter[year].climate_configs["stochastic_run"], False)
+    fill(f_iter[year].climate_configs["use_seed"], True)
     
-        # forcing scaling
-        fill(
-            f_iter[cal][year].species_configs["forcing_scale"],
-            cal_df[cal].loc[:, "fscale_CO2"],
-            specie="CO2",
-        )
+    initialise(f_iter[year].forcing, f_iter[year-1].forcing[-1, ...])
+    initialise(f_iter[year].temperature, f_iter[year-1].temperature[-1, ...])
+#    initialise(f_iter[year].concentration, f_iter[year-1].concentration[-1, ...]) 
+    initialise(f_iter[year].airborne_emissions, f_iter[year-1].airborne_emissions[-1, ...])
+    initialise(f_iter[year].cumulative_emissions, f_iter[year-1].cumulative_emissions[-1, ...])
+    initialise(f_iter[year].alpha_lifetime, f_iter[year-1].alpha_lifetime[-1, ...])
+    f_iter[year].gas_partitions=copy.deepcopy(f_iter[year-1].gas_partitions)
     
-        # initial condition of CO2 concentration (but not baseline for forcing calculations)
-        fill(
-            f_iter[cal][year].species_configs["baseline_concentration"],
-            cal_df[cal].loc[:,"cc_co2_concentration_1750"],
-            specie="CO2",
-        )
-        fill(f_iter[cal][year].species_configs['baseline_concentration'], 808.2490285, specie='CH4')
-        fill(f_iter[cal][year].species_configs['baseline_concentration'], 273.021047, specie='N2O')
-        
-        initialise(f_iter[cal][year].forcing, f_iter[cal][year-1].forcing[-1, ...])
-        initialise(f_iter[cal][year].temperature, f_iter[cal][year-1].temperature[-1, ...])
-        initialise(f_iter[cal][year].airborne_emissions, f_iter[cal][year-1].airborne_emissions[-1, ...])
-        initialise(f_iter[cal][year].cumulative_emissions, f_iter[cal][year-1].cumulative_emissions[-1, ...])
-        initialise(f_iter[cal][year].alpha_lifetime, f_iter[cal][year-1].alpha_lifetime[-1, ...])
-        f_iter[cal][year].gas_partitions=copy.deepcopy(f_iter[cal][year-1].gas_partitions)
+    f_iter[year].run(progress=False)
     
-        # do the run
-        f_iter[cal][year].run(progress=False)
-    
-        # check if over 1000 GtC
-        for iconf, config in enumerate(f_iter[cal][year].configs):
-            if not hit1000_df[cal].loc[config] and (f_iter[cal][year].cumulative_emissions[-1, 0, iconf, 0] >= 1000*44.009/12.011):
-                hit1000_df[cal].loc[config] = True
-                gasbox_restarts[cal][config] = copy.deepcopy(f_iter[cal][year].gas_partitions[0, iconf, :, :])
-                forcing_restarts[cal][config] = copy.deepcopy(f_iter[cal][year].forcing[-1, 0, iconf, :])
-                temperature_restarts[cal][config] = copy.deepcopy(f_iter[cal][year].temperature[-1, 0, iconf, :])
-                airborne_restarts[cal][config] = copy.deepcopy(f_iter[cal][year].airborne_emissions[-1, 0, iconf, :])
-                cumulative_restarts[cal][config] = copy.deepcopy(f_iter[cal][year].cumulative_emissions[-1, 0, iconf, :])
-                alpha_restarts[cal][config] = copy.deepcopy(f_iter[cal][year].alpha_lifetime[-1, 0, iconf, :])
+    # check if over 750, 1000, 2000 GtC
+    for cum_emis in emissions_levels:
+        for iconf, config in enumerate(f_iter[year].configs):
+            if not hit_cum_emis_df[cum_emis].loc[config] and (f_iter[year].cumulative_emissions[-1, 0, iconf, 0] >= cum_emis*44.009/12.011):
+                hit_cum_emis_df[cum_emis].loc[config] = True
+                gasbox_restarts[cum_emis][config] = copy.deepcopy(f_iter[year].gas_partitions[0, iconf, :, :])
+                forcing_restarts[cum_emis][config] = copy.deepcopy(f_iter[year].forcing[-1, 0, iconf, :])
+                temperature_restarts[cum_emis][config] = copy.deepcopy(f_iter[year].temperature[-1, 0, iconf, :])
+                concentration_restarts[cum_emis][config] = copy.deepcopy(f_iter[year].concentration[-1, 0, iconf, :])
+                airborne_restarts[cum_emis][config] = copy.deepcopy(f_iter[year].airborne_emissions[-1, 0, iconf, :])
+                cumulative_restarts[cum_emis][config] = copy.deepcopy(f_iter[year].cumulative_emissions[-1, 0, iconf, :])
+                alpha_restarts[cum_emis][config] = copy.deepcopy(f_iter[year].alpha_lifetime[-1, 0, iconf, :])
 
 # %% [markdown]
 # ## 1pctCO2-4xext
@@ -719,6 +706,447 @@ initialise(f.airborne_emissions, 0)
 # # for BGC, set temperature to zero
 # fill(f.temperature, 0)
 # fill(f.forcing, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## esm-1pct-brch-1000PgC
+
+# %%
+scenario = "esm-1pct-brch-1000PgC"
+exp_conc = "piControl"
+exp_emis = None
+startyear = 1750  # not tracked
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021", temperature_prescribed=False)
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_concentrations.loc[
+            (master_concentrations["Scenario"]==exp_conc) & (master_concentrations["Variable"].str.endswith(f"|{specie}")),
+            str(startyear):str(endyear)
+        ].T
+
+fill(f.emissions, 0, specie="CO2")
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+# this needs to be undone from the override
+f.species_configs["baseline_concentration"].loc[dict(specie="CO2")] = df_defaults.loc[(df_defaults["name"]=="CO2"), "baseline_concentration"].values[0]
+
+# set initial conditions
+for iconf, config in enumerate(f.configs):
+    initialise(f.concentration, concentration_restarts[1000][config], config=config)
+    initialise(f.forcing, forcing_restarts[1000][config], config=config)
+    initialise(f.temperature, temperature_restarts[1000][config], config=config)
+    initialise(f.airborne_emissions, airborne_restarts[1000][config], config=config)
+    initialise(f.cumulative_emissions, cumulative_restarts[1000][config], config=config)
+    f.gas_partitions[0, iconf, :, :] = gasbox_restarts[1000][config]
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %% [markdown]
+# ## esm-1pct-brch-2000PgC
+
+# %%
+scenario = "esm-1pct-brch-2000PgC"
+exp_conc = "piControl"
+exp_emis = None
+startyear = 1750  # not tracked
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021", temperature_prescribed=False)
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_concentrations.loc[
+            (master_concentrations["Scenario"]==exp_conc) & (master_concentrations["Variable"].str.endswith(f"|{specie}")),
+            str(startyear):str(endyear)
+        ].T
+
+fill(f.emissions, 0, specie="CO2")
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+# this needs to be undone from the override
+f.species_configs["baseline_concentration"].loc[dict(specie="CO2")] = df_defaults.loc[(df_defaults["name"]=="CO2"), "baseline_concentration"].values[0]
+
+# set initial conditions
+for iconf, config in enumerate(f.configs):
+    initialise(f.concentration, concentration_restarts[2000][config], config=config)
+    initialise(f.forcing, forcing_restarts[2000][config], config=config)
+    initialise(f.temperature, temperature_restarts[2000][config], config=config)
+    initialise(f.airborne_emissions, airborne_restarts[2000][config], config=config)
+    initialise(f.cumulative_emissions, cumulative_restarts[2000][config], config=config)
+    f.gas_partitions[0, iconf, :, :] = gasbox_restarts[2000][config]
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %% [markdown]
+# ## esm-1pct-brch-750PgC
+
+# %%
+scenario = "esm-1pct-brch-750PgC"
+exp_conc = "piControl"
+exp_emis = None
+startyear = 1750  # not tracked
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021", temperature_prescribed=False)
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_concentrations.loc[
+            (master_concentrations["Scenario"]==exp_conc) & (master_concentrations["Variable"].str.endswith(f"|{specie}")),
+            str(startyear):str(endyear)
+        ].T
+
+fill(f.emissions, 0, specie="CO2")
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+# this needs to be undone from the override
+f.species_configs["baseline_concentration"].loc[dict(specie="CO2")] = df_defaults.loc[(df_defaults["name"]=="CO2"), "baseline_concentration"].values[0]
+
+# set initial conditions
+for iconf, config in enumerate(f.configs):
+    initialise(f.concentration, concentration_restarts[750][config], config=config)
+    initialise(f.forcing, forcing_restarts[750][config], config=config)
+    initialise(f.temperature, temperature_restarts[750][config], config=config)
+    initialise(f.airborne_emissions, airborne_restarts[750][config], config=config)
+    initialise(f.cumulative_emissions, cumulative_restarts[750][config], config=config)
+    f.gas_partitions[0, iconf, :, :] = gasbox_restarts[750][config]
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %% [markdown]
+# ## abrupt-4xCO2
+
+# %%
+scenario = "abrupt-4xCO2"
+exp_conc = "abrupt-4xCO2"
+exp_emis = None
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+for specie in f.species:
+    f.concentration.loc[
+        dict(
+            timebounds=np.arange(startyear, endyear+1), 
+            scenario=scenario,
+            specie=specie
+        )
+    ] = master_concentrations.loc[
+        (master_concentrations["Scenario"]==exp_conc) & (master_concentrations["Variable"].str.endswith(f"|{specie}")),
+        str(startyear):str(endyear)
+    ].T
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+# this needs to be undone from the override
+f.species_configs["baseline_concentration"].loc[dict(specie="CO2")] = df_defaults.loc[(df_defaults["name"]=="CO2"), "baseline_concentration"].values[0]
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## abrupt-2xCO2
+
+# %%
+scenario = "abrupt-2xCO2"
+exp_conc = "abrupt-2xCO2"
+exp_emis = None
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+for specie in f.species:
+    f.concentration.loc[
+        dict(
+            timebounds=np.arange(startyear, endyear+1), 
+            scenario=scenario,
+            specie=specie
+        )
+    ] = master_concentrations.loc[
+        (master_concentrations["Scenario"]==exp_conc) & (master_concentrations["Variable"].str.endswith(f"|{specie}")),
+        str(startyear):str(endyear)
+    ].T
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+# this needs to be undone from the override
+f.species_configs["baseline_concentration"].loc[dict(specie="CO2")] = df_defaults.loc[(df_defaults["name"]=="CO2"), "baseline_concentration"].values[0]
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## abrupt-0p5xCO2
+
+# %%
+scenario = "abrupt-0p5xCO2"
+exp_conc = "abrupt-0p5xCO2"
+exp_emis = None
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+for specie in f.species:
+    f.concentration.loc[
+        dict(
+            timebounds=np.arange(startyear, endyear+1), 
+            scenario=scenario,
+            specie=specie
+        )
+    ] = master_concentrations.loc[
+        (master_concentrations["Scenario"]==exp_conc) & (master_concentrations["Variable"].str.endswith(f"|{specie}")),
+        str(startyear):str(endyear)
+    ].T
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+# this needs to be undone from the override
+f.species_configs["baseline_concentration"].loc[dict(specie="CO2")] = df_defaults.loc[(df_defaults["name"]=="CO2"), "baseline_concentration"].values[0]
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## esm-pi-CO2pulse
+
+# %%
+scenario = "esm-pi-CO2pulse"
+exp_conc = "piControl"
+exp_emis = "esm-pi-CO2pulse"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# for idealised experiments only where there is a combination of emissions and concentrations sources, we will ignore the
+# half year time offset and ignore the last time point of the emissions time series. In effect we add 0.5 to the time stamp
+# in the emissions file.
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_concentrations.loc[
+            (master_concentrations["Scenario"]==exp_conc) & (master_concentrations["Variable"].str.endswith(f"|{specie}")),
+            str(startyear):str(endyear)
+        ].T
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_emissions.loc[
+            (master_emissions["Scenario"]==exp_emis) & (master_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
 
 f.run()
 
