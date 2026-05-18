@@ -5,7 +5,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.3
+#       jupytext_version: 1.19.2
 #   kernelspec:
 #     display_name: Python 3 (ipykernel)
 #     language: python
@@ -42,6 +42,7 @@ FAIR_CALIBRATION = "v1.6.1"
 # common datasets
 master_concentrations = pd.read_csv(f"../data/{RCMIP3_VERSION}/RCMIP3_input_datafiles/rcmip_phase3_concentrations_{RCMIP3_VERSION}.csv")
 master_emissions = pd.read_csv(f"../data/{RCMIP3_VERSION}/RCMIP3_input_datafiles/rcmip_phase3_emissions_{RCMIP3_VERSION}.csv")
+master_forcing = pd.read_csv(f"../data/{RCMIP3_VERSION}/RCMIP3_input_datafiles/rcmip_phase3_forcing_{RCMIP3_VERSION}.csv") 
 
 # %%
 # variable mapping
@@ -1156,4 +1157,288 @@ f.to_netcdf(f"../output/native/{scenario}.nc")
 # %%
 pl.plot(f.temperature.sel(layer=0, scenario=scenario));
 
+# %% [markdown]
+# ## esm-bell-1000PgC
+
 # %%
+scenario = "esm-bell-1000PgC"
+exp_conc = "piControl"
+exp_emis = "esm-bell-1000PgC"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# for idealised experiments only where there is a combination of emissions and concentrations sources, we will ignore the
+# half year time offset and ignore the last time point of the emissions time series. In effect we add 0.5 to the time stamp
+# in the emissions file.
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_concentrations.loc[
+            (master_concentrations["Scenario"]==exp_conc) & (master_concentrations["Variable"].str.endswith(f"|{specie}")),
+            str(startyear):str(endyear)
+        ].T
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_emissions.loc[
+            (master_emissions["Scenario"]==exp_emis) & (master_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## esm-bell-2000PgC
+
+# %%
+scenario = "esm-bell-2000PgC"
+exp_conc = "piControl"
+exp_emis = "esm-bell-2000PgC"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# for idealised experiments only where there is a combination of emissions and concentrations sources, we will ignore the
+# half year time offset and ignore the last time point of the emissions time series. In effect we add 0.5 to the time stamp
+# in the emissions file.
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_concentrations.loc[
+            (master_concentrations["Scenario"]==exp_conc) & (master_concentrations["Variable"].str.endswith(f"|{specie}")),
+            str(startyear):str(endyear)
+        ].T
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_emissions.loc[
+            (master_emissions["Scenario"]==exp_emis) & (master_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## esm-bell-750PgC
+
+# %%
+scenario = "esm-bell-750PgC"
+exp_conc = "piControl"
+exp_emis = "esm-bell-750PgC"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# for idealised experiments only where there is a combination of emissions and concentrations sources, we will ignore the
+# half year time offset and ignore the last time point of the emissions time series. In effect we add 0.5 to the time stamp
+# in the emissions file.
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_concentrations.loc[
+            (master_concentrations["Scenario"]==exp_conc) & (master_concentrations["Variable"].str.endswith(f"|{specie}")),
+            str(startyear):str(endyear)
+        ].T
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_emissions.loc[
+            (master_emissions["Scenario"]==exp_emis) & (master_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## historical
+
+# %%
+scenario = "historical"
+exp_conc = "historical"
+exp_emis = "historical"
+exp_forc = "historical"
+startyear = 1750
+endyear = 2022
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# for idealised experiments only where there is a combination of emissions and concentrations sources, we will ignore the
+# half year time offset and ignore the last time point of the emissions time series. In effect we add 0.5 to the time stamp
+# in the emissions file.
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_concentrations.loc[
+            (master_concentrations["Scenario"]==exp_conc) & (master_concentrations["Variable"].str.endswith(f"|{specie}")),
+            str(startyear):str(endyear)
+        ].T
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_emissions.loc[
+            (master_emissions["Scenario"]==exp_emis) & (master_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
