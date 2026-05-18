@@ -7,7 +7,7 @@
 ## to get started
 
 1. clone the repository
-2. create the conda environment with `conda env create environment.yml`
+2. create the conda environment with `conda env create -f environment.yml`
 3. activate with `conda activate fair-rcmip3`
 4. Grab the RCMIP dataset zipfile from https://doi.org/10.5281/zenodo.20154638 and save it in the `data` folder
 5. `cd data` and `unzip RCMIP3_protocol_bundle_V1_1_7.zip -d v1.1.7` (replace the filename and version if necessary)
