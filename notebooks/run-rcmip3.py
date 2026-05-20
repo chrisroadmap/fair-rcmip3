@@ -44,6 +44,10 @@ master_concentrations = pd.read_csv(f"../data/{RCMIP3_VERSION}/RCMIP3_input_data
 master_emissions = pd.read_csv(f"../data/{RCMIP3_VERSION}/RCMIP3_input_datafiles/rcmip_phase3_emissions_{RCMIP3_VERSION}.csv")
 master_forcing = pd.read_csv(f"../data/{RCMIP3_VERSION}/RCMIP3_input_datafiles/rcmip_phase3_forcing_{RCMIP3_VERSION}.csv") 
 
+master_cmip7_concentrations = pd.read_csv(f"../data/{RCMIP3_VERSION}/RCMIP3_input_datafiles/rcmip_phase3_concentrations_ScenarioMIP_{RCMIP3_VERSION}.csv")
+master_cmip7_emissions = pd.read_csv(f"../data/{RCMIP3_VERSION}/RCMIP3_input_datafiles/rcmip_phase3_emissions_ScenarioMIP_{RCMIP3_VERSION}.csv")
+master_cmip7_forcing = pd.read_csv(f"../data/{RCMIP3_VERSION}/RCMIP3_input_datafiles/rcmip_phase3_forcing_ScenarioMIP_{RCMIP3_VERSION}.csv") 
+
 # %%
 # variable mapping
 variables_short = [var.split("|")[-1] for var in master_emissions.Variable.unique()] + [var.split("|")[-1] for var in master_forcing.Variable.unique()]
@@ -5336,7 +5340,3375 @@ f.run()
 # save for later
 f.to_netcdf(f"../output/native/{scenario}.nc")
 
-# %% jupyter={"source_hidden": true}
+# %%
 pl.plot(f.temperature.sel(scenario=scenario, layer=0));
+
+# %% [markdown]
+# ## esm-scen7-H
+
+# %%
+scenario = "esm-scen7-H"
+exp_conc = "scen7-H"
+exp_emis = "scen7-H"
+exp_forc = "scen7-H"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# concentrations and forcing are given as midyears
+# so we want to subtract 0.5 years from the given value to put on to fair timebounds
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        working_concentrations = copy.deepcopy(
+            master_cmip7_concentrations.loc[
+                (master_cmip7_concentrations["Scenario"]==exp_conc) & (master_cmip7_concentrations["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear-1)
+            ].T
+        )
+        working_concentrations.index = pd.to_numeric(working_concentrations.index)
+        working_concentrations.loc[startyear-1] = working_concentrations.loc[startyear]
+        working_concentrations.loc[endyear] = 2 * working_concentrations.loc[endyear-1] - working_concentrations.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_concentrations.loc[midyear] = np.nan
+        working_concentrations = working_concentrations.sort_index()
+        working_concentrations = working_concentrations.interpolate()
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_concentrations.loc[np.arange(startyear-0.5, endyear, 1)].values
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_cmip7_emissions.loc[
+            (master_cmip7_emissions["Scenario"]==exp_emis) & (master_cmip7_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+    elif properties[specie]["input_mode"]=="forcing":
+        forcing_scale = df_configs[f"forcing_scale[{specie}]"].values.squeeze()
+        working_forcing = copy.deepcopy(
+            master_cmip7_forcing.loc[
+                (master_cmip7_forcing["Scenario"]==exp_forc) & (master_cmip7_forcing["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear)
+            ].T
+        )
+        working_forcing.index = pd.to_numeric(working_forcing.index)
+        working_forcing.loc[startyear-1] = working_forcing.loc[startyear]
+        working_forcing.loc[endyear] = 2 * working_forcing.loc[endyear-1] - working_forcing.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_forcing.loc[midyear] = np.nan
+        working_forcing = working_forcing.sort_index()
+        working_forcing = working_forcing.interpolate()
+        f.forcing.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_forcing.loc[np.arange(startyear-0.5, endyear, 1)].values * forcing_scale
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## esm-scen7-HL
+
+# %%
+scenario = "esm-scen7-HL"
+exp_conc = "scen7-HL"
+exp_emis = "scen7-HL"
+exp_forc = "scen7-HL"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# concentrations and forcing are given as midyears
+# so we want to subtract 0.5 years from the given value to put on to fair timebounds
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        working_concentrations = copy.deepcopy(
+            master_cmip7_concentrations.loc[
+                (master_cmip7_concentrations["Scenario"]==exp_conc) & (master_cmip7_concentrations["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear-1)
+            ].T
+        )
+        working_concentrations.index = pd.to_numeric(working_concentrations.index)
+        working_concentrations.loc[startyear-1] = working_concentrations.loc[startyear]
+        working_concentrations.loc[endyear] = 2 * working_concentrations.loc[endyear-1] - working_concentrations.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_concentrations.loc[midyear] = np.nan
+        working_concentrations = working_concentrations.sort_index()
+        working_concentrations = working_concentrations.interpolate()
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_concentrations.loc[np.arange(startyear-0.5, endyear, 1)].values
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_cmip7_emissions.loc[
+            (master_cmip7_emissions["Scenario"]==exp_emis) & (master_cmip7_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+    elif properties[specie]["input_mode"]=="forcing":
+        forcing_scale = df_configs[f"forcing_scale[{specie}]"].values.squeeze()
+        working_forcing = copy.deepcopy(
+            master_cmip7_forcing.loc[
+                (master_cmip7_forcing["Scenario"]==exp_forc) & (master_cmip7_forcing["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear)
+            ].T
+        )
+        working_forcing.index = pd.to_numeric(working_forcing.index)
+        working_forcing.loc[startyear-1] = working_forcing.loc[startyear]
+        working_forcing.loc[endyear] = 2 * working_forcing.loc[endyear-1] - working_forcing.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_forcing.loc[midyear] = np.nan
+        working_forcing = working_forcing.sort_index()
+        working_forcing = working_forcing.interpolate()
+        f.forcing.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_forcing.loc[np.arange(startyear-0.5, endyear, 1)].values * forcing_scale
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## esm-scen7-M
+
+# %%
+scenario = "esm-scen7-M"
+exp_conc = "scen7-M"
+exp_emis = "scen7-M"
+exp_forc = "scen7-M"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# concentrations and forcing are given as midyears
+# so we want to subtract 0.5 years from the given value to put on to fair timebounds
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        working_concentrations = copy.deepcopy(
+            master_cmip7_concentrations.loc[
+                (master_cmip7_concentrations["Scenario"]==exp_conc) & (master_cmip7_concentrations["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear-1)
+            ].T
+        )
+        working_concentrations.index = pd.to_numeric(working_concentrations.index)
+        working_concentrations.loc[startyear-1] = working_concentrations.loc[startyear]
+        working_concentrations.loc[endyear] = 2 * working_concentrations.loc[endyear-1] - working_concentrations.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_concentrations.loc[midyear] = np.nan
+        working_concentrations = working_concentrations.sort_index()
+        working_concentrations = working_concentrations.interpolate()
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_concentrations.loc[np.arange(startyear-0.5, endyear, 1)].values
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_cmip7_emissions.loc[
+            (master_cmip7_emissions["Scenario"]==exp_emis) & (master_cmip7_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+    elif properties[specie]["input_mode"]=="forcing":
+        forcing_scale = df_configs[f"forcing_scale[{specie}]"].values.squeeze()
+        working_forcing = copy.deepcopy(
+            master_cmip7_forcing.loc[
+                (master_cmip7_forcing["Scenario"]==exp_forc) & (master_cmip7_forcing["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear)
+            ].T
+        )
+        working_forcing.index = pd.to_numeric(working_forcing.index)
+        working_forcing.loc[startyear-1] = working_forcing.loc[startyear]
+        working_forcing.loc[endyear] = 2 * working_forcing.loc[endyear-1] - working_forcing.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_forcing.loc[midyear] = np.nan
+        working_forcing = working_forcing.sort_index()
+        working_forcing = working_forcing.interpolate()
+        f.forcing.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_forcing.loc[np.arange(startyear-0.5, endyear, 1)].values * forcing_scale
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## esm-scen7-ML
+
+# %%
+scenario = "esm-scen7-ML"
+exp_conc = "scen7-ML"
+exp_emis = "scen7-ML"
+exp_forc = "scen7-ML"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# concentrations and forcing are given as midyears
+# so we want to subtract 0.5 years from the given value to put on to fair timebounds
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        working_concentrations = copy.deepcopy(
+            master_cmip7_concentrations.loc[
+                (master_cmip7_concentrations["Scenario"]==exp_conc) & (master_cmip7_concentrations["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear-1)
+            ].T
+        )
+        working_concentrations.index = pd.to_numeric(working_concentrations.index)
+        working_concentrations.loc[startyear-1] = working_concentrations.loc[startyear]
+        working_concentrations.loc[endyear] = 2 * working_concentrations.loc[endyear-1] - working_concentrations.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_concentrations.loc[midyear] = np.nan
+        working_concentrations = working_concentrations.sort_index()
+        working_concentrations = working_concentrations.interpolate()
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_concentrations.loc[np.arange(startyear-0.5, endyear, 1)].values
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_cmip7_emissions.loc[
+            (master_cmip7_emissions["Scenario"]==exp_emis) & (master_cmip7_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+    elif properties[specie]["input_mode"]=="forcing":
+        forcing_scale = df_configs[f"forcing_scale[{specie}]"].values.squeeze()
+        working_forcing = copy.deepcopy(
+            master_cmip7_forcing.loc[
+                (master_cmip7_forcing["Scenario"]==exp_forc) & (master_cmip7_forcing["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear)
+            ].T
+        )
+        working_forcing.index = pd.to_numeric(working_forcing.index)
+        working_forcing.loc[startyear-1] = working_forcing.loc[startyear]
+        working_forcing.loc[endyear] = 2 * working_forcing.loc[endyear-1] - working_forcing.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_forcing.loc[midyear] = np.nan
+        working_forcing = working_forcing.sort_index()
+        working_forcing = working_forcing.interpolate()
+        f.forcing.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_forcing.loc[np.arange(startyear-0.5, endyear, 1)].values * forcing_scale
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## esm-scen7-L
+
+# %%
+scenario = "esm-scen7-L"
+exp_conc = "scen7-L"
+exp_emis = "scen7-L"
+exp_forc = "scen7-L"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# concentrations and forcing are given as midyears
+# so we want to subtract 0.5 years from the given value to put on to fair timebounds
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        working_concentrations = copy.deepcopy(
+            master_cmip7_concentrations.loc[
+                (master_cmip7_concentrations["Scenario"]==exp_conc) & (master_cmip7_concentrations["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear-1)
+            ].T
+        )
+        working_concentrations.index = pd.to_numeric(working_concentrations.index)
+        working_concentrations.loc[startyear-1] = working_concentrations.loc[startyear]
+        working_concentrations.loc[endyear] = 2 * working_concentrations.loc[endyear-1] - working_concentrations.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_concentrations.loc[midyear] = np.nan
+        working_concentrations = working_concentrations.sort_index()
+        working_concentrations = working_concentrations.interpolate()
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_concentrations.loc[np.arange(startyear-0.5, endyear, 1)].values
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_cmip7_emissions.loc[
+            (master_cmip7_emissions["Scenario"]==exp_emis) & (master_cmip7_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+    elif properties[specie]["input_mode"]=="forcing":
+        forcing_scale = df_configs[f"forcing_scale[{specie}]"].values.squeeze()
+        working_forcing = copy.deepcopy(
+            master_cmip7_forcing.loc[
+                (master_cmip7_forcing["Scenario"]==exp_forc) & (master_cmip7_forcing["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear)
+            ].T
+        )
+        working_forcing.index = pd.to_numeric(working_forcing.index)
+        working_forcing.loc[startyear-1] = working_forcing.loc[startyear]
+        working_forcing.loc[endyear] = 2 * working_forcing.loc[endyear-1] - working_forcing.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_forcing.loc[midyear] = np.nan
+        working_forcing = working_forcing.sort_index()
+        working_forcing = working_forcing.interpolate()
+        f.forcing.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_forcing.loc[np.arange(startyear-0.5, endyear, 1)].values * forcing_scale
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## esm-scen7-VL
+
+# %%
+scenario = "esm-scen7-VL"
+exp_conc = "scen7-VL"
+exp_emis = "scen7-VL"
+exp_forc = "scen7-VL"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# concentrations and forcing are given as midyears
+# so we want to subtract 0.5 years from the given value to put on to fair timebounds
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        working_concentrations = copy.deepcopy(
+            master_cmip7_concentrations.loc[
+                (master_cmip7_concentrations["Scenario"]==exp_conc) & (master_cmip7_concentrations["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear-1)
+            ].T
+        )
+        working_concentrations.index = pd.to_numeric(working_concentrations.index)
+        working_concentrations.loc[startyear-1] = working_concentrations.loc[startyear]
+        working_concentrations.loc[endyear] = 2 * working_concentrations.loc[endyear-1] - working_concentrations.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_concentrations.loc[midyear] = np.nan
+        working_concentrations = working_concentrations.sort_index()
+        working_concentrations = working_concentrations.interpolate()
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_concentrations.loc[np.arange(startyear-0.5, endyear, 1)].values
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_cmip7_emissions.loc[
+            (master_cmip7_emissions["Scenario"]==exp_emis) & (master_cmip7_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+    elif properties[specie]["input_mode"]=="forcing":
+        forcing_scale = df_configs[f"forcing_scale[{specie}]"].values.squeeze()
+        working_forcing = copy.deepcopy(
+            master_cmip7_forcing.loc[
+                (master_cmip7_forcing["Scenario"]==exp_forc) & (master_cmip7_forcing["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear)
+            ].T
+        )
+        working_forcing.index = pd.to_numeric(working_forcing.index)
+        working_forcing.loc[startyear-1] = working_forcing.loc[startyear]
+        working_forcing.loc[endyear] = 2 * working_forcing.loc[endyear-1] - working_forcing.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_forcing.loc[midyear] = np.nan
+        working_forcing = working_forcing.sort_index()
+        working_forcing = working_forcing.interpolate()
+        f.forcing.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_forcing.loc[np.arange(startyear-0.5, endyear, 1)].values * forcing_scale
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## esm-scen7-LN
+
+# %%
+scenario = "esm-scen7-LN"
+exp_conc = "scen7-LN"
+exp_emis = "scen7-LN"
+exp_forc = "scen7-LN"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# concentrations and forcing are given as midyears
+# so we want to subtract 0.5 years from the given value to put on to fair timebounds
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        working_concentrations = copy.deepcopy(
+            master_cmip7_concentrations.loc[
+                (master_cmip7_concentrations["Scenario"]==exp_conc) & (master_cmip7_concentrations["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear-1)
+            ].T
+        )
+        working_concentrations.index = pd.to_numeric(working_concentrations.index)
+        working_concentrations.loc[startyear-1] = working_concentrations.loc[startyear]
+        working_concentrations.loc[endyear] = 2 * working_concentrations.loc[endyear-1] - working_concentrations.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_concentrations.loc[midyear] = np.nan
+        working_concentrations = working_concentrations.sort_index()
+        working_concentrations = working_concentrations.interpolate()
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_concentrations.loc[np.arange(startyear-0.5, endyear, 1)].values
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_cmip7_emissions.loc[
+            (master_cmip7_emissions["Scenario"]==exp_emis) & (master_cmip7_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+    elif properties[specie]["input_mode"]=="forcing":
+        forcing_scale = df_configs[f"forcing_scale[{specie}]"].values.squeeze()
+        working_forcing = copy.deepcopy(
+            master_cmip7_forcing.loc[
+                (master_cmip7_forcing["Scenario"]==exp_forc) & (master_cmip7_forcing["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear)
+            ].T
+        )
+        working_forcing.index = pd.to_numeric(working_forcing.index)
+        working_forcing.loc[startyear-1] = working_forcing.loc[startyear]
+        working_forcing.loc[endyear] = 2 * working_forcing.loc[endyear-1] - working_forcing.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_forcing.loc[midyear] = np.nan
+        working_forcing = working_forcing.sort_index()
+        working_forcing = working_forcing.interpolate()
+        f.forcing.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_forcing.loc[np.arange(startyear-0.5, endyear, 1)].values * forcing_scale
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## scen7-HC
+
+# %%
+scenario = "scen7-HC"
+exp_conc = "scen7-H"
+exp_emis = "scen7-H"
+exp_forc = "scen7-H"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# concentrations and forcing are given as midyears
+# so we want to subtract 0.5 years from the given value to put on to fair timebounds
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        working_concentrations = copy.deepcopy(
+            master_cmip7_concentrations.loc[
+                (master_cmip7_concentrations["Scenario"]==exp_conc) & (master_cmip7_concentrations["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear-1)
+            ].T
+        )
+        working_concentrations.index = pd.to_numeric(working_concentrations.index)
+        working_concentrations.loc[startyear-1] = working_concentrations.loc[startyear]
+        working_concentrations.loc[endyear] = 2 * working_concentrations.loc[endyear-1] - working_concentrations.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_concentrations.loc[midyear] = np.nan
+        working_concentrations = working_concentrations.sort_index()
+        working_concentrations = working_concentrations.interpolate()
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_concentrations.loc[np.arange(startyear-0.5, endyear, 1)].values
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_cmip7_emissions.loc[
+            (master_cmip7_emissions["Scenario"]==exp_emis) & (master_cmip7_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+    elif properties[specie]["input_mode"]=="forcing":
+        forcing_scale = df_configs[f"forcing_scale[{specie}]"].values.squeeze()
+        working_forcing = copy.deepcopy(
+            master_cmip7_forcing.loc[
+                (master_cmip7_forcing["Scenario"]==exp_forc) & (master_cmip7_forcing["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear)
+            ].T
+        )
+        working_forcing.index = pd.to_numeric(working_forcing.index)
+        working_forcing.loc[startyear-1] = working_forcing.loc[startyear]
+        working_forcing.loc[endyear] = 2 * working_forcing.loc[endyear-1] - working_forcing.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_forcing.loc[midyear] = np.nan
+        working_forcing = working_forcing.sort_index()
+        working_forcing = working_forcing.interpolate()
+        f.forcing.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_forcing.loc[np.arange(startyear-0.5, endyear, 1)].values * forcing_scale
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## scen7-HLC
+
+# %%
+scenario = "scen7-HLC"
+exp_conc = "scen7-HL"
+exp_emis = "scen7-HL"
+exp_forc = "scen7-HL"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# concentrations and forcing are given as midyears
+# so we want to subtract 0.5 years from the given value to put on to fair timebounds
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        working_concentrations = copy.deepcopy(
+            master_cmip7_concentrations.loc[
+                (master_cmip7_concentrations["Scenario"]==exp_conc) & (master_cmip7_concentrations["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear-1)
+            ].T
+        )
+        working_concentrations.index = pd.to_numeric(working_concentrations.index)
+        working_concentrations.loc[startyear-1] = working_concentrations.loc[startyear]
+        working_concentrations.loc[endyear] = 2 * working_concentrations.loc[endyear-1] - working_concentrations.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_concentrations.loc[midyear] = np.nan
+        working_concentrations = working_concentrations.sort_index()
+        working_concentrations = working_concentrations.interpolate()
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_concentrations.loc[np.arange(startyear-0.5, endyear, 1)].values
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_cmip7_emissions.loc[
+            (master_cmip7_emissions["Scenario"]==exp_emis) & (master_cmip7_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+    elif properties[specie]["input_mode"]=="forcing":
+        forcing_scale = df_configs[f"forcing_scale[{specie}]"].values.squeeze()
+        working_forcing = copy.deepcopy(
+            master_cmip7_forcing.loc[
+                (master_cmip7_forcing["Scenario"]==exp_forc) & (master_cmip7_forcing["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear)
+            ].T
+        )
+        working_forcing.index = pd.to_numeric(working_forcing.index)
+        working_forcing.loc[startyear-1] = working_forcing.loc[startyear]
+        working_forcing.loc[endyear] = 2 * working_forcing.loc[endyear-1] - working_forcing.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_forcing.loc[midyear] = np.nan
+        working_forcing = working_forcing.sort_index()
+        working_forcing = working_forcing.interpolate()
+        f.forcing.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_forcing.loc[np.arange(startyear-0.5, endyear, 1)].values * forcing_scale
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## scen7-MC
+
+# %%
+scenario = "scen7-MC"
+exp_conc = "scen7-M"
+exp_emis = "scen7-M"
+exp_forc = "scen7-M"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# concentrations and forcing are given as midyears
+# so we want to subtract 0.5 years from the given value to put on to fair timebounds
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        working_concentrations = copy.deepcopy(
+            master_cmip7_concentrations.loc[
+                (master_cmip7_concentrations["Scenario"]==exp_conc) & (master_cmip7_concentrations["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear-1)
+            ].T
+        )
+        working_concentrations.index = pd.to_numeric(working_concentrations.index)
+        working_concentrations.loc[startyear-1] = working_concentrations.loc[startyear]
+        working_concentrations.loc[endyear] = 2 * working_concentrations.loc[endyear-1] - working_concentrations.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_concentrations.loc[midyear] = np.nan
+        working_concentrations = working_concentrations.sort_index()
+        working_concentrations = working_concentrations.interpolate()
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_concentrations.loc[np.arange(startyear-0.5, endyear, 1)].values
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_cmip7_emissions.loc[
+            (master_cmip7_emissions["Scenario"]==exp_emis) & (master_cmip7_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+    elif properties[specie]["input_mode"]=="forcing":
+        forcing_scale = df_configs[f"forcing_scale[{specie}]"].values.squeeze()
+        working_forcing = copy.deepcopy(
+            master_cmip7_forcing.loc[
+                (master_cmip7_forcing["Scenario"]==exp_forc) & (master_cmip7_forcing["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear)
+            ].T
+        )
+        working_forcing.index = pd.to_numeric(working_forcing.index)
+        working_forcing.loc[startyear-1] = working_forcing.loc[startyear]
+        working_forcing.loc[endyear] = 2 * working_forcing.loc[endyear-1] - working_forcing.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_forcing.loc[midyear] = np.nan
+        working_forcing = working_forcing.sort_index()
+        working_forcing = working_forcing.interpolate()
+        f.forcing.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_forcing.loc[np.arange(startyear-0.5, endyear, 1)].values * forcing_scale
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## scen7-MLC
+
+# %%
+scenario = "scen7-MLC"
+exp_conc = "scen7-ML"
+exp_emis = "scen7-ML"
+exp_forc = "scen7-ML"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# concentrations and forcing are given as midyears
+# so we want to subtract 0.5 years from the given value to put on to fair timebounds
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        working_concentrations = copy.deepcopy(
+            master_cmip7_concentrations.loc[
+                (master_cmip7_concentrations["Scenario"]==exp_conc) & (master_cmip7_concentrations["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear-1)
+            ].T
+        )
+        working_concentrations.index = pd.to_numeric(working_concentrations.index)
+        working_concentrations.loc[startyear-1] = working_concentrations.loc[startyear]
+        working_concentrations.loc[endyear] = 2 * working_concentrations.loc[endyear-1] - working_concentrations.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_concentrations.loc[midyear] = np.nan
+        working_concentrations = working_concentrations.sort_index()
+        working_concentrations = working_concentrations.interpolate()
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_concentrations.loc[np.arange(startyear-0.5, endyear, 1)].values
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_cmip7_emissions.loc[
+            (master_cmip7_emissions["Scenario"]==exp_emis) & (master_cmip7_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+    elif properties[specie]["input_mode"]=="forcing":
+        forcing_scale = df_configs[f"forcing_scale[{specie}]"].values.squeeze()
+        working_forcing = copy.deepcopy(
+            master_cmip7_forcing.loc[
+                (master_cmip7_forcing["Scenario"]==exp_forc) & (master_cmip7_forcing["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear)
+            ].T
+        )
+        working_forcing.index = pd.to_numeric(working_forcing.index)
+        working_forcing.loc[startyear-1] = working_forcing.loc[startyear]
+        working_forcing.loc[endyear] = 2 * working_forcing.loc[endyear-1] - working_forcing.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_forcing.loc[midyear] = np.nan
+        working_forcing = working_forcing.sort_index()
+        working_forcing = working_forcing.interpolate()
+        f.forcing.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_forcing.loc[np.arange(startyear-0.5, endyear, 1)].values * forcing_scale
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## scen7-LC
+
+# %%
+scenario = "scen7-LC"
+exp_conc = "scen7-L"
+exp_emis = "scen7-L"
+exp_forc = "scen7-L"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# concentrations and forcing are given as midyears
+# so we want to subtract 0.5 years from the given value to put on to fair timebounds
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        working_concentrations = copy.deepcopy(
+            master_cmip7_concentrations.loc[
+                (master_cmip7_concentrations["Scenario"]==exp_conc) & (master_cmip7_concentrations["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear-1)
+            ].T
+        )
+        working_concentrations.index = pd.to_numeric(working_concentrations.index)
+        working_concentrations.loc[startyear-1] = working_concentrations.loc[startyear]
+        working_concentrations.loc[endyear] = 2 * working_concentrations.loc[endyear-1] - working_concentrations.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_concentrations.loc[midyear] = np.nan
+        working_concentrations = working_concentrations.sort_index()
+        working_concentrations = working_concentrations.interpolate()
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_concentrations.loc[np.arange(startyear-0.5, endyear, 1)].values
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_cmip7_emissions.loc[
+            (master_cmip7_emissions["Scenario"]==exp_emis) & (master_cmip7_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+    elif properties[specie]["input_mode"]=="forcing":
+        forcing_scale = df_configs[f"forcing_scale[{specie}]"].values.squeeze()
+        working_forcing = copy.deepcopy(
+            master_cmip7_forcing.loc[
+                (master_cmip7_forcing["Scenario"]==exp_forc) & (master_cmip7_forcing["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear)
+            ].T
+        )
+        working_forcing.index = pd.to_numeric(working_forcing.index)
+        working_forcing.loc[startyear-1] = working_forcing.loc[startyear]
+        working_forcing.loc[endyear] = 2 * working_forcing.loc[endyear-1] - working_forcing.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_forcing.loc[midyear] = np.nan
+        working_forcing = working_forcing.sort_index()
+        working_forcing = working_forcing.interpolate()
+        f.forcing.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_forcing.loc[np.arange(startyear-0.5, endyear, 1)].values * forcing_scale
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## scen7-LNC
+
+# %%
+scenario = "scen7-LNC"
+exp_conc = "scen7-LN"
+exp_emis = "scen7-LN"
+exp_forc = "scen7-LN"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# concentrations and forcing are given as midyears
+# so we want to subtract 0.5 years from the given value to put on to fair timebounds
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        working_concentrations = copy.deepcopy(
+            master_cmip7_concentrations.loc[
+                (master_cmip7_concentrations["Scenario"]==exp_conc) & (master_cmip7_concentrations["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear-1)
+            ].T
+        )
+        working_concentrations.index = pd.to_numeric(working_concentrations.index)
+        working_concentrations.loc[startyear-1] = working_concentrations.loc[startyear]
+        working_concentrations.loc[endyear] = 2 * working_concentrations.loc[endyear-1] - working_concentrations.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_concentrations.loc[midyear] = np.nan
+        working_concentrations = working_concentrations.sort_index()
+        working_concentrations = working_concentrations.interpolate()
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_concentrations.loc[np.arange(startyear-0.5, endyear, 1)].values
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_cmip7_emissions.loc[
+            (master_cmip7_emissions["Scenario"]==exp_emis) & (master_cmip7_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+    elif properties[specie]["input_mode"]=="forcing":
+        forcing_scale = df_configs[f"forcing_scale[{specie}]"].values.squeeze()
+        working_forcing = copy.deepcopy(
+            master_cmip7_forcing.loc[
+                (master_cmip7_forcing["Scenario"]==exp_forc) & (master_cmip7_forcing["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear)
+            ].T
+        )
+        working_forcing.index = pd.to_numeric(working_forcing.index)
+        working_forcing.loc[startyear-1] = working_forcing.loc[startyear]
+        working_forcing.loc[endyear] = 2 * working_forcing.loc[endyear-1] - working_forcing.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_forcing.loc[midyear] = np.nan
+        working_forcing = working_forcing.sort_index()
+        working_forcing = working_forcing.interpolate()
+        f.forcing.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_forcing.loc[np.arange(startyear-0.5, endyear, 1)].values * forcing_scale
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## esm-allGHG-scen7-H
+
+# %%
+scenario = "esm-allGHG-scen7-H"
+exp_conc = "scen7-H"
+exp_emis = "scen7-H"
+exp_forc = "scen7-H"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# concentrations and forcing are given as midyears
+# so we want to subtract 0.5 years from the given value to put on to fair timebounds
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        working_concentrations = copy.deepcopy(
+            master_cmip7_concentrations.loc[
+                (master_cmip7_concentrations["Scenario"]==exp_conc) & (master_cmip7_concentrations["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear-1)
+            ].T
+        )
+        working_concentrations.index = pd.to_numeric(working_concentrations.index)
+        working_concentrations.loc[startyear-1] = working_concentrations.loc[startyear]
+        working_concentrations.loc[endyear] = 2 * working_concentrations.loc[endyear-1] - working_concentrations.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_concentrations.loc[midyear] = np.nan
+        working_concentrations = working_concentrations.sort_index()
+        working_concentrations = working_concentrations.interpolate()
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_concentrations.loc[np.arange(startyear-0.5, endyear, 1)].values
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_cmip7_emissions.loc[
+            (master_cmip7_emissions["Scenario"]==exp_emis) & (master_cmip7_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+    elif properties[specie]["input_mode"]=="forcing":
+        forcing_scale = df_configs[f"forcing_scale[{specie}]"].values.squeeze()
+        working_forcing = copy.deepcopy(
+            master_cmip7_forcing.loc[
+                (master_cmip7_forcing["Scenario"]==exp_forc) & (master_cmip7_forcing["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear)
+            ].T
+        )
+        working_forcing.index = pd.to_numeric(working_forcing.index)
+        working_forcing.loc[startyear-1] = working_forcing.loc[startyear]
+        working_forcing.loc[endyear] = 2 * working_forcing.loc[endyear-1] - working_forcing.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_forcing.loc[midyear] = np.nan
+        working_forcing = working_forcing.sort_index()
+        working_forcing = working_forcing.interpolate()
+        f.forcing.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_forcing.loc[np.arange(startyear-0.5, endyear, 1)].values * forcing_scale
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## esm-allGHG-scen7-HL
+
+# %%
+scenario = "esm-allGHG-scen7-HL"
+exp_conc = "scen7-HL"
+exp_emis = "scen7-HL"
+exp_forc = "scen7-HL"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# concentrations and forcing are given as midyears
+# so we want to subtract 0.5 years from the given value to put on to fair timebounds
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        working_concentrations = copy.deepcopy(
+            master_cmip7_concentrations.loc[
+                (master_cmip7_concentrations["Scenario"]==exp_conc) & (master_cmip7_concentrations["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear-1)
+            ].T
+        )
+        working_concentrations.index = pd.to_numeric(working_concentrations.index)
+        working_concentrations.loc[startyear-1] = working_concentrations.loc[startyear]
+        working_concentrations.loc[endyear] = 2 * working_concentrations.loc[endyear-1] - working_concentrations.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_concentrations.loc[midyear] = np.nan
+        working_concentrations = working_concentrations.sort_index()
+        working_concentrations = working_concentrations.interpolate()
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_concentrations.loc[np.arange(startyear-0.5, endyear, 1)].values
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_cmip7_emissions.loc[
+            (master_cmip7_emissions["Scenario"]==exp_emis) & (master_cmip7_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+    elif properties[specie]["input_mode"]=="forcing":
+        forcing_scale = df_configs[f"forcing_scale[{specie}]"].values.squeeze()
+        working_forcing = copy.deepcopy(
+            master_cmip7_forcing.loc[
+                (master_cmip7_forcing["Scenario"]==exp_forc) & (master_cmip7_forcing["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear)
+            ].T
+        )
+        working_forcing.index = pd.to_numeric(working_forcing.index)
+        working_forcing.loc[startyear-1] = working_forcing.loc[startyear]
+        working_forcing.loc[endyear] = 2 * working_forcing.loc[endyear-1] - working_forcing.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_forcing.loc[midyear] = np.nan
+        working_forcing = working_forcing.sort_index()
+        working_forcing = working_forcing.interpolate()
+        f.forcing.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_forcing.loc[np.arange(startyear-0.5, endyear, 1)].values * forcing_scale
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## esm-allGHG-scen7-H-CH4L
+
+# %%
+scenario = "esm-allGHG-scen7-H-CH4L"
+exp_conc = "esm-allGHG-scen7-H-CH4L"
+exp_emis = "esm-allGHG-scen7-H-CH4L"
+exp_forc = "scen7-H"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# concentrations and forcing are given as midyears
+# so we want to subtract 0.5 years from the given value to put on to fair timebounds
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        working_concentrations = copy.deepcopy(
+            master_cmip7_concentrations.loc[
+                (master_cmip7_concentrations["Scenario"]==exp_conc) & (master_cmip7_concentrations["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear-1)
+            ].T
+        )
+        working_concentrations.index = pd.to_numeric(working_concentrations.index)
+        working_concentrations.loc[startyear-1] = working_concentrations.loc[startyear]
+        working_concentrations.loc[endyear] = 2 * working_concentrations.loc[endyear-1] - working_concentrations.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_concentrations.loc[midyear] = np.nan
+        working_concentrations = working_concentrations.sort_index()
+        working_concentrations = working_concentrations.interpolate()
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_concentrations.loc[np.arange(startyear-0.5, endyear, 1)].values
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_cmip7_emissions.loc[
+            (master_cmip7_emissions["Scenario"]==exp_emis) & (master_cmip7_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+    elif properties[specie]["input_mode"]=="forcing":
+        forcing_scale = df_configs[f"forcing_scale[{specie}]"].values.squeeze()
+        working_forcing = copy.deepcopy(
+            master_cmip7_forcing.loc[
+                (master_cmip7_forcing["Scenario"]==exp_forc) & (master_cmip7_forcing["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear)
+            ].T
+        )
+        working_forcing.index = pd.to_numeric(working_forcing.index)
+        working_forcing.loc[startyear-1] = working_forcing.loc[startyear]
+        working_forcing.loc[endyear] = 2 * working_forcing.loc[endyear-1] - working_forcing.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_forcing.loc[midyear] = np.nan
+        working_forcing = working_forcing.sort_index()
+        working_forcing = working_forcing.interpolate()
+        f.forcing.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_forcing.loc[np.arange(startyear-0.5, endyear, 1)].values * forcing_scale
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## esm-allGHG-scen7-M
+
+# %%
+scenario = "esm-allGHG-scen7-M"
+exp_conc = "scen7-M"
+exp_emis = "scen7-M"
+exp_forc = "scen7-M"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# concentrations and forcing are given as midyears
+# so we want to subtract 0.5 years from the given value to put on to fair timebounds
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        working_concentrations = copy.deepcopy(
+            master_cmip7_concentrations.loc[
+                (master_cmip7_concentrations["Scenario"]==exp_conc) & (master_cmip7_concentrations["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear-1)
+            ].T
+        )
+        working_concentrations.index = pd.to_numeric(working_concentrations.index)
+        working_concentrations.loc[startyear-1] = working_concentrations.loc[startyear]
+        working_concentrations.loc[endyear] = 2 * working_concentrations.loc[endyear-1] - working_concentrations.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_concentrations.loc[midyear] = np.nan
+        working_concentrations = working_concentrations.sort_index()
+        working_concentrations = working_concentrations.interpolate()
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_concentrations.loc[np.arange(startyear-0.5, endyear, 1)].values
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_cmip7_emissions.loc[
+            (master_cmip7_emissions["Scenario"]==exp_emis) & (master_cmip7_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+    elif properties[specie]["input_mode"]=="forcing":
+        forcing_scale = df_configs[f"forcing_scale[{specie}]"].values.squeeze()
+        working_forcing = copy.deepcopy(
+            master_cmip7_forcing.loc[
+                (master_cmip7_forcing["Scenario"]==exp_forc) & (master_cmip7_forcing["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear)
+            ].T
+        )
+        working_forcing.index = pd.to_numeric(working_forcing.index)
+        working_forcing.loc[startyear-1] = working_forcing.loc[startyear]
+        working_forcing.loc[endyear] = 2 * working_forcing.loc[endyear-1] - working_forcing.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_forcing.loc[midyear] = np.nan
+        working_forcing = working_forcing.sort_index()
+        working_forcing = working_forcing.interpolate()
+        f.forcing.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_forcing.loc[np.arange(startyear-0.5, endyear, 1)].values * forcing_scale
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## esm-allGHG-scen7-ML
+
+# %%
+scenario = "esm-allGHG-scen7-ML"
+exp_conc = "scen7-ML"
+exp_emis = "scen7-ML"
+exp_forc = "scen7-ML"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# concentrations and forcing are given as midyears
+# so we want to subtract 0.5 years from the given value to put on to fair timebounds
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        working_concentrations = copy.deepcopy(
+            master_cmip7_concentrations.loc[
+                (master_cmip7_concentrations["Scenario"]==exp_conc) & (master_cmip7_concentrations["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear-1)
+            ].T
+        )
+        working_concentrations.index = pd.to_numeric(working_concentrations.index)
+        working_concentrations.loc[startyear-1] = working_concentrations.loc[startyear]
+        working_concentrations.loc[endyear] = 2 * working_concentrations.loc[endyear-1] - working_concentrations.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_concentrations.loc[midyear] = np.nan
+        working_concentrations = working_concentrations.sort_index()
+        working_concentrations = working_concentrations.interpolate()
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_concentrations.loc[np.arange(startyear-0.5, endyear, 1)].values
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_cmip7_emissions.loc[
+            (master_cmip7_emissions["Scenario"]==exp_emis) & (master_cmip7_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+    elif properties[specie]["input_mode"]=="forcing":
+        forcing_scale = df_configs[f"forcing_scale[{specie}]"].values.squeeze()
+        working_forcing = copy.deepcopy(
+            master_cmip7_forcing.loc[
+                (master_cmip7_forcing["Scenario"]==exp_forc) & (master_cmip7_forcing["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear)
+            ].T
+        )
+        working_forcing.index = pd.to_numeric(working_forcing.index)
+        working_forcing.loc[startyear-1] = working_forcing.loc[startyear]
+        working_forcing.loc[endyear] = 2 * working_forcing.loc[endyear-1] - working_forcing.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_forcing.loc[midyear] = np.nan
+        working_forcing = working_forcing.sort_index()
+        working_forcing = working_forcing.interpolate()
+        f.forcing.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_forcing.loc[np.arange(startyear-0.5, endyear, 1)].values * forcing_scale
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## esm-allGHG-scen7-L
+
+# %%
+scenario = "esm-allGHG-scen7-L"
+exp_conc = "scen7-L"
+exp_emis = "scen7-L"
+exp_forc = "scen7-L"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# concentrations and forcing are given as midyears
+# so we want to subtract 0.5 years from the given value to put on to fair timebounds
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        working_concentrations = copy.deepcopy(
+            master_cmip7_concentrations.loc[
+                (master_cmip7_concentrations["Scenario"]==exp_conc) & (master_cmip7_concentrations["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear-1)
+            ].T
+        )
+        working_concentrations.index = pd.to_numeric(working_concentrations.index)
+        working_concentrations.loc[startyear-1] = working_concentrations.loc[startyear]
+        working_concentrations.loc[endyear] = 2 * working_concentrations.loc[endyear-1] - working_concentrations.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_concentrations.loc[midyear] = np.nan
+        working_concentrations = working_concentrations.sort_index()
+        working_concentrations = working_concentrations.interpolate()
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_concentrations.loc[np.arange(startyear-0.5, endyear, 1)].values
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_cmip7_emissions.loc[
+            (master_cmip7_emissions["Scenario"]==exp_emis) & (master_cmip7_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+    elif properties[specie]["input_mode"]=="forcing":
+        forcing_scale = df_configs[f"forcing_scale[{specie}]"].values.squeeze()
+        working_forcing = copy.deepcopy(
+            master_cmip7_forcing.loc[
+                (master_cmip7_forcing["Scenario"]==exp_forc) & (master_cmip7_forcing["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear)
+            ].T
+        )
+        working_forcing.index = pd.to_numeric(working_forcing.index)
+        working_forcing.loc[startyear-1] = working_forcing.loc[startyear]
+        working_forcing.loc[endyear] = 2 * working_forcing.loc[endyear-1] - working_forcing.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_forcing.loc[midyear] = np.nan
+        working_forcing = working_forcing.sort_index()
+        working_forcing = working_forcing.interpolate()
+        f.forcing.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_forcing.loc[np.arange(startyear-0.5, endyear, 1)].values * forcing_scale
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## esm-allGHG-scen7-L-CH4H
+
+# %%
+scenario = "esm-allGHG-scen7-L-CH4H"
+exp_conc = "esm-allGHG-scen7-L-CH4H"
+exp_emis = "esm-allGHG-scen7-L-CH4H"
+exp_forc = "scen7-L"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# concentrations and forcing are given as midyears
+# so we want to subtract 0.5 years from the given value to put on to fair timebounds
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        working_concentrations = copy.deepcopy(
+            master_cmip7_concentrations.loc[
+                (master_cmip7_concentrations["Scenario"]==exp_conc) & (master_cmip7_concentrations["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear-1)
+            ].T
+        )
+        working_concentrations.index = pd.to_numeric(working_concentrations.index)
+        working_concentrations.loc[startyear-1] = working_concentrations.loc[startyear]
+        working_concentrations.loc[endyear] = 2 * working_concentrations.loc[endyear-1] - working_concentrations.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_concentrations.loc[midyear] = np.nan
+        working_concentrations = working_concentrations.sort_index()
+        working_concentrations = working_concentrations.interpolate()
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_concentrations.loc[np.arange(startyear-0.5, endyear, 1)].values
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_cmip7_emissions.loc[
+            (master_cmip7_emissions["Scenario"]==exp_emis) & (master_cmip7_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+    elif properties[specie]["input_mode"]=="forcing":
+        forcing_scale = df_configs[f"forcing_scale[{specie}]"].values.squeeze()
+        working_forcing = copy.deepcopy(
+            master_cmip7_forcing.loc[
+                (master_cmip7_forcing["Scenario"]==exp_forc) & (master_cmip7_forcing["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear)
+            ].T
+        )
+        working_forcing.index = pd.to_numeric(working_forcing.index)
+        working_forcing.loc[startyear-1] = working_forcing.loc[startyear]
+        working_forcing.loc[endyear] = 2 * working_forcing.loc[endyear-1] - working_forcing.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_forcing.loc[midyear] = np.nan
+        working_forcing = working_forcing.sort_index()
+        working_forcing = working_forcing.interpolate()
+        f.forcing.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_forcing.loc[np.arange(startyear-0.5, endyear, 1)].values * forcing_scale
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## esm-allGHG-scen7-VL
+
+# %%
+scenario = "esm-allGHG-scen7-VL"
+exp_conc = "scen7-VL"
+exp_emis = "scen7-VL"
+exp_forc = "scen7-VL"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# concentrations and forcing are given as midyears
+# so we want to subtract 0.5 years from the given value to put on to fair timebounds
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        working_concentrations = copy.deepcopy(
+            master_cmip7_concentrations.loc[
+                (master_cmip7_concentrations["Scenario"]==exp_conc) & (master_cmip7_concentrations["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear-1)
+            ].T
+        )
+        working_concentrations.index = pd.to_numeric(working_concentrations.index)
+        working_concentrations.loc[startyear-1] = working_concentrations.loc[startyear]
+        working_concentrations.loc[endyear] = 2 * working_concentrations.loc[endyear-1] - working_concentrations.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_concentrations.loc[midyear] = np.nan
+        working_concentrations = working_concentrations.sort_index()
+        working_concentrations = working_concentrations.interpolate()
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_concentrations.loc[np.arange(startyear-0.5, endyear, 1)].values
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_cmip7_emissions.loc[
+            (master_cmip7_emissions["Scenario"]==exp_emis) & (master_cmip7_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+    elif properties[specie]["input_mode"]=="forcing":
+        forcing_scale = df_configs[f"forcing_scale[{specie}]"].values.squeeze()
+        working_forcing = copy.deepcopy(
+            master_cmip7_forcing.loc[
+                (master_cmip7_forcing["Scenario"]==exp_forc) & (master_cmip7_forcing["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear)
+            ].T
+        )
+        working_forcing.index = pd.to_numeric(working_forcing.index)
+        working_forcing.loc[startyear-1] = working_forcing.loc[startyear]
+        working_forcing.loc[endyear] = 2 * working_forcing.loc[endyear-1] - working_forcing.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_forcing.loc[midyear] = np.nan
+        working_forcing = working_forcing.sort_index()
+        working_forcing = working_forcing.interpolate()
+        f.forcing.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_forcing.loc[np.arange(startyear-0.5, endyear, 1)].values * forcing_scale
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## esm-allGHG-scen7-LN
+
+# %%
+scenario = "esm-allGHG-scen7-LN"
+exp_conc = "scen7-LN"
+exp_emis = "scen7-LN"
+exp_forc = "scen7-LN"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# concentrations and forcing are given as midyears
+# so we want to subtract 0.5 years from the given value to put on to fair timebounds
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        working_concentrations = copy.deepcopy(
+            master_cmip7_concentrations.loc[
+                (master_cmip7_concentrations["Scenario"]==exp_conc) & (master_cmip7_concentrations["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear-1)
+            ].T
+        )
+        working_concentrations.index = pd.to_numeric(working_concentrations.index)
+        working_concentrations.loc[startyear-1] = working_concentrations.loc[startyear]
+        working_concentrations.loc[endyear] = 2 * working_concentrations.loc[endyear-1] - working_concentrations.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_concentrations.loc[midyear] = np.nan
+        working_concentrations = working_concentrations.sort_index()
+        working_concentrations = working_concentrations.interpolate()
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_concentrations.loc[np.arange(startyear-0.5, endyear, 1)].values
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_cmip7_emissions.loc[
+            (master_cmip7_emissions["Scenario"]==exp_emis) & (master_cmip7_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+    elif properties[specie]["input_mode"]=="forcing":
+        forcing_scale = df_configs[f"forcing_scale[{specie}]"].values.squeeze()
+        working_forcing = copy.deepcopy(
+            master_cmip7_forcing.loc[
+                (master_cmip7_forcing["Scenario"]==exp_forc) & (master_cmip7_forcing["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+                str(startyear):str(endyear)
+            ].T
+        )
+        working_forcing.index = pd.to_numeric(working_forcing.index)
+        working_forcing.loc[startyear-1] = working_forcing.loc[startyear]
+        working_forcing.loc[endyear] = 2 * working_forcing.loc[endyear-1] - working_forcing.loc[endyear-2]
+        for midyear in np.arange(startyear-0.5, endyear):
+            working_forcing.loc[midyear] = np.nan
+        working_forcing = working_forcing.sort_index()
+        working_forcing = working_forcing.interpolate()
+        f.forcing.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = working_forcing.loc[np.arange(startyear-0.5, endyear, 1)].values * forcing_scale
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## esm-flat10
+
+# %%
+scenario = "esm-flat10"
+exp_conc = "piControl"
+exp_emis = "esm-flat10"
+startyear = 1750
+endyear = 2170
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# for idealised experiments only where there is a combination of emissions and concentrations sources, we will ignore the
+# half year time offset and ignore the last time point of the emissions time series. In effect we add 0.5 to the time stamp
+# in the emissions file.
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_concentrations.loc[
+            (master_concentrations["Scenario"]==exp_conc) & (master_concentrations["Variable"].str.endswith(f"|{specie}")),
+            str(startyear):str(endyear)
+        ].T
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_emissions.loc[
+            (master_emissions["Scenario"]==exp_emis) & (master_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## esm-flat10-zec
+
+# %%
+scenario = "esm-flat10-zec"
+exp_conc = "piControl"
+exp_emis = "esm-flat10-zec"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# for idealised experiments only where there is a combination of emissions and concentrations sources, we will ignore the
+# half year time offset and ignore the last time point of the emissions time series. In effect we add 0.5 to the time stamp
+# in the emissions file.
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_concentrations.loc[
+            (master_concentrations["Scenario"]==exp_conc) & (master_concentrations["Variable"].str.endswith(f"|{specie}")),
+            str(startyear):str(endyear)
+        ].T
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_emissions.loc[
+            (master_emissions["Scenario"]==exp_emis) & (master_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## esm-flat10-cdr
+
+# %%
+scenario = "esm-flat10-cdr"
+exp_conc = "piControl"
+exp_emis = "esm-flat10-cdr"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# for idealised experiments only where there is a combination of emissions and concentrations sources, we will ignore the
+# half year time offset and ignore the last time point of the emissions time series. In effect we add 0.5 to the time stamp
+# in the emissions file.
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_concentrations.loc[
+            (master_concentrations["Scenario"]==exp_conc) & (master_concentrations["Variable"].str.endswith(f"|{specie}")),
+            str(startyear):str(endyear)
+        ].T
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_emissions.loc[
+            (master_emissions["Scenario"]==exp_emis) & (master_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## esm-flat10-nz
+
+# %%
+scenario = "esm-flat10-nz"
+exp_conc = "piControl"
+exp_emis = "esm-flat10-nz"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# for idealised experiments only where there is a combination of emissions and concentrations sources, we will ignore the
+# half year time offset and ignore the last time point of the emissions time series. In effect we add 0.5 to the time stamp
+# in the emissions file.
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_concentrations.loc[
+            (master_concentrations["Scenario"]==exp_conc) & (master_concentrations["Variable"].str.endswith(f"|{specie}")),
+            str(startyear):str(endyear)
+        ].T
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_emissions.loc[
+            (master_emissions["Scenario"]==exp_emis) & (master_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## esm-flat10-rev
+
+# %%
+scenario = "esm-flat10-rev"
+exp_conc = "piControl"
+exp_emis = "esm-flat10-rev"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# for idealised experiments only where there is a combination of emissions and concentrations sources, we will ignore the
+# half year time offset and ignore the last time point of the emissions time series. In effect we add 0.5 to the time stamp
+# in the emissions file.
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_concentrations.loc[
+            (master_concentrations["Scenario"]==exp_conc) & (master_concentrations["Variable"].str.endswith(f"|{specie}")),
+            str(startyear):str(endyear)
+        ].T
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_emissions.loc[
+            (master_emissions["Scenario"]==exp_emis) & (master_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## esm-flat7.5
+
+# %%
+scenario = "esm-flat7.5"
+exp_conc = "piControl"
+exp_emis = "esm-flat7.5"
+startyear = 1750
+endyear = 2170
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# for idealised experiments only where there is a combination of emissions and concentrations sources, we will ignore the
+# half year time offset and ignore the last time point of the emissions time series. In effect we add 0.5 to the time stamp
+# in the emissions file.
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_concentrations.loc[
+            (master_concentrations["Scenario"]==exp_conc) & (master_concentrations["Variable"].str.endswith(f"|{specie}")),
+            str(startyear):str(endyear)
+        ].T
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_emissions.loc[
+            (master_emissions["Scenario"]==exp_emis) & (master_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## esm-flat7.5-zec
+
+# %%
+scenario = "esm-flat7.5-zec"
+exp_conc = "piControl"
+exp_emis = "esm-flat7.5-zec"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# for idealised experiments only where there is a combination of emissions and concentrations sources, we will ignore the
+# half year time offset and ignore the last time point of the emissions time series. In effect we add 0.5 to the time stamp
+# in the emissions file.
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_concentrations.loc[
+            (master_concentrations["Scenario"]==exp_conc) & (master_concentrations["Variable"].str.endswith(f"|{specie}")),
+            str(startyear):str(endyear)
+        ].T
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_emissions.loc[
+            (master_emissions["Scenario"]==exp_emis) & (master_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## esm-flat7.5-cdr
+
+# %%
+scenario = "esm-flat7.5-cdr"
+exp_conc = "piControl"
+exp_emis = "esm-flat7.5-cdr"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# for idealised experiments only where there is a combination of emissions and concentrations sources, we will ignore the
+# half year time offset and ignore the last time point of the emissions time series. In effect we add 0.5 to the time stamp
+# in the emissions file.
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_concentrations.loc[
+            (master_concentrations["Scenario"]==exp_conc) & (master_concentrations["Variable"].str.endswith(f"|{specie}")),
+            str(startyear):str(endyear)
+        ].T
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_emissions.loc[
+            (master_emissions["Scenario"]==exp_emis) & (master_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## esm-flat7.5-nz
+
+# %%
+scenario = "esm-flat7.5-nz"
+exp_conc = "piControl"
+exp_emis = "esm-flat7.5-nz"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# for idealised experiments only where there is a combination of emissions and concentrations sources, we will ignore the
+# half year time offset and ignore the last time point of the emissions time series. In effect we add 0.5 to the time stamp
+# in the emissions file.
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_concentrations.loc[
+            (master_concentrations["Scenario"]==exp_conc) & (master_concentrations["Variable"].str.endswith(f"|{specie}")),
+            str(startyear):str(endyear)
+        ].T
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_emissions.loc[
+            (master_emissions["Scenario"]==exp_emis) & (master_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## esm-flat7.5-rev
+
+# %%
+scenario = "esm-flat7.5-rev"
+exp_conc = "piControl"
+exp_emis = "esm-flat7.5-rev"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# for idealised experiments only where there is a combination of emissions and concentrations sources, we will ignore the
+# half year time offset and ignore the last time point of the emissions time series. In effect we add 0.5 to the time stamp
+# in the emissions file.
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_concentrations.loc[
+            (master_concentrations["Scenario"]==exp_conc) & (master_concentrations["Variable"].str.endswith(f"|{specie}")),
+            str(startyear):str(endyear)
+        ].T
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_emissions.loc[
+            (master_emissions["Scenario"]==exp_emis) & (master_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## esm-flat20
+
+# %%
+scenario = "esm-flat20"
+exp_conc = "piControl"
+exp_emis = "esm-flat20"
+startyear = 1750
+endyear = 2170
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# for idealised experiments only where there is a combination of emissions and concentrations sources, we will ignore the
+# half year time offset and ignore the last time point of the emissions time series. In effect we add 0.5 to the time stamp
+# in the emissions file.
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_concentrations.loc[
+            (master_concentrations["Scenario"]==exp_conc) & (master_concentrations["Variable"].str.endswith(f"|{specie}")),
+            str(startyear):str(endyear)
+        ].T
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_emissions.loc[
+            (master_emissions["Scenario"]==exp_emis) & (master_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## esm-flat20-zec
+
+# %%
+scenario = "esm-flat20-zec"
+exp_conc = "piControl"
+exp_emis = "esm-flat20-zec"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# for idealised experiments only where there is a combination of emissions and concentrations sources, we will ignore the
+# half year time offset and ignore the last time point of the emissions time series. In effect we add 0.5 to the time stamp
+# in the emissions file.
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_concentrations.loc[
+            (master_concentrations["Scenario"]==exp_conc) & (master_concentrations["Variable"].str.endswith(f"|{specie}")),
+            str(startyear):str(endyear)
+        ].T
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_emissions.loc[
+            (master_emissions["Scenario"]==exp_emis) & (master_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## esm-flat20-cdr
+
+# %%
+scenario = "esm-flat20-cdr"
+exp_conc = "piControl"
+exp_emis = "esm-flat20-cdr"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# for idealised experiments only where there is a combination of emissions and concentrations sources, we will ignore the
+# half year time offset and ignore the last time point of the emissions time series. In effect we add 0.5 to the time stamp
+# in the emissions file.
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_concentrations.loc[
+            (master_concentrations["Scenario"]==exp_conc) & (master_concentrations["Variable"].str.endswith(f"|{specie}")),
+            str(startyear):str(endyear)
+        ].T
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_emissions.loc[
+            (master_emissions["Scenario"]==exp_emis) & (master_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## esm-flat20-nz
+
+# %%
+scenario = "esm-flat20-nz"
+exp_conc = "piControl"
+exp_emis = "esm-flat20-nz"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# for idealised experiments only where there is a combination of emissions and concentrations sources, we will ignore the
+# half year time offset and ignore the last time point of the emissions time series. In effect we add 0.5 to the time stamp
+# in the emissions file.
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_concentrations.loc[
+            (master_concentrations["Scenario"]==exp_conc) & (master_concentrations["Variable"].str.endswith(f"|{specie}")),
+            str(startyear):str(endyear)
+        ].T
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_emissions.loc[
+            (master_emissions["Scenario"]==exp_emis) & (master_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+
+# %% [markdown]
+# ## esm-flat20-rev
+
+# %%
+scenario = "esm-flat20-rev"
+exp_conc = "piControl"
+exp_emis = "esm-flat20-rev"
+startyear = 1750
+endyear = 2500
+
+# %%
+f = FAIR(ch4_method="Thornhill2021")
+scenarios = [scenario]
+
+f.define_time(startyear, endyear, 1)
+f.define_scenarios(scenarios)
+
+species, properties = read_properties(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+f.define_species(species, properties)
+df_configs = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv", index_col=0)
+df_defaults = pd.read_csv(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+
+valid_all = df_configs.index
+
+f.define_configs(valid_all)
+f.allocate()
+
+# for idealised experiments only where there is a combination of emissions and concentrations sources, we will ignore the
+# half year time offset and ignore the last time point of the emissions time series. In effect we add 0.5 to the time stamp
+# in the emissions file.
+for specie in f.species:
+    if properties[specie]["input_mode"]=="concentration":
+        f.concentration.loc[
+            dict(
+                timebounds=np.arange(startyear, endyear+1), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_concentrations.loc[
+            (master_concentrations["Scenario"]==exp_conc) & (master_concentrations["Variable"].str.endswith(f"|{specie}")),
+            str(startyear):str(endyear)
+        ].T
+    elif properties[specie]["input_mode"]=="emissions":
+        f.emissions.loc[
+            dict(
+                timepoints=np.arange(startyear+0.5, endyear), 
+                scenario=scenario,
+                specie=specie
+            )
+        ] = master_emissions.loc[
+            (master_emissions["Scenario"]==exp_emis) & (master_emissions["Variable"].str.endswith(f"|{RCMIP3_LOOKUP[specie]}")),
+            str(startyear):str(endyear-1)
+        ].T * DEDAFTER[specie]
+
+f.fill_species_configs(f"../data/fair_calibration/{FAIR_CALIBRATION}/{scenario}/species_configs_properties.csv")
+f.override_defaults(f"../data/fair_calibration/{FAIR_CALIBRATION}/calibrated_constrained_parameters.csv")
+
+initialise(f.concentration, f.species_configs["baseline_concentration"])
+initialise(f.forcing, 0)
+initialise(f.temperature, 0)
+initialise(f.cumulative_emissions, 0)
+initialise(f.airborne_emissions, 0)
+
+f.run()
+
+# save for later
+f.to_netcdf(f"../output/native/{scenario}.nc")
+
+# %%
+pl.plot(f.temperature.sel(layer=0, scenario=scenario));
 
 # %%
