@@ -68,6 +68,7 @@ temp_dict["AFOLU"] = "CO2 AFOLU"
 temp_dict["Land Use"] = "Land use"
 
 RCMIP3_LOOKUP = {value: key for key, value in temp_dict.items()}
+RCMIP3_LOOKUP["Albedo Change"] = "Land use"
 #RCMIP3_LOOKUP
 
 # %%
