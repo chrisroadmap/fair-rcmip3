@@ -11,4 +11,8 @@ dependencies:
   - netCDF4
   - numpy
   - pandas
+  - scmdata
   - xarray
+  - pip
+  - pip:
+    - pyrcmip
