@@ -138,12 +138,6 @@ f.run()
 # save for later
 f.to_netcdf(f"../output/native/{scenario}.nc")
 
-# %%
-pl.plot(f.temperature.sel(layer=0, scenario=scenario));
-
-# %%
-pl.plot(f.forcing_sum.sel(scenario=scenario));
-
 # %% [markdown]
 # ## esm-piControl
 #
@@ -215,12 +209,6 @@ f.run()
 # save for later
 f.to_netcdf(f"../output/native/{scenario}.nc")
 
-# %%
-pl.plot(f.temperature.sel(layer=0, scenario=scenario));
-
-# %%
-pl.plot(f.forcing_sum.sel(scenario=scenario));
-
 # %% [markdown]
 # ## esm-allGHG-piControl
 #
@@ -277,15 +265,6 @@ f.run()
 
 # save for later
 f.to_netcdf(f"../output/native/{scenario}.nc")
-
-# %%
-pl.plot(f.temperature.sel(layer=0, scenario=scenario));
-
-# %%
-pl.plot(f.forcing_sum.sel(scenario=scenario));
-
-# %%
-pl.plot(f.forcing.sel(scenario=scenario, specie="CO2"));
 
 # %% [markdown]
 # ## 1pctCO2
@@ -350,12 +329,6 @@ forcing_1pctco2 = copy.deepcopy(f.forcing_sum)
 
 # needed for branch experiments
 cumulative_emissions_1pctco2 = copy.deepcopy(f.cumulative_emissions.sel(specie="CO2"))
-
-# %%
-pl.hist(cumulative_emissions_1pctco2.sel(timebounds=1990, scenario=scenario)/3.664)
-
-# %%
-pl.plot(f.temperature.sel(layer=0, scenario=scenario));
 
 # %% [markdown]
 # ### esm-1pctCO2-brch-* sub-experiments
@@ -518,9 +491,6 @@ f.run()
 # save for later
 f.to_netcdf(f"../output/native/{scenario}.nc")
 
-# %%
-pl.plot(f.temperature.sel(layer=0, scenario=scenario));
-
 # %% [markdown]
 # ## 1pctCO2-cdr
 
@@ -577,9 +547,6 @@ f.run()
 
 # save for later
 f.to_netcdf(f"../output/native/{scenario}.nc")
-
-# %%
-pl.plot(f.temperature.sel(layer=0, scenario=scenario));
 
 # %% [markdown]
 # ## 1pctCO2-bgc
@@ -651,9 +618,6 @@ f.run()
 # save for later
 f.to_netcdf(f"../output/native/{scenario}.nc")
 
-# %%
-pl.plot(f.temperature.sel(layer=0, scenario=scenario));
-
 # %% [markdown]
 # ## 1pctCO2-rad
 #
@@ -719,9 +683,6 @@ f.run()
 
 # save for later
 f.to_netcdf(f"../output/native/{scenario}.nc")
-
-# %%
-pl.plot(f.temperature.sel(layer=0, scenario=scenario));
 
 # %% [markdown]
 # ## esm-1pct-brch-1000PgC
@@ -969,9 +930,6 @@ f.run()
 # save for later
 f.to_netcdf(f"../output/native/{scenario}.nc")
 
-# %%
-pl.plot(f.temperature.sel(layer=0, scenario=scenario));
-
 # %% [markdown]
 # ## abrupt-2xCO2
 
@@ -1029,9 +987,6 @@ f.run()
 # save for later
 f.to_netcdf(f"../output/native/{scenario}.nc")
 
-# %%
-pl.plot(f.temperature.sel(layer=0, scenario=scenario));
-
 # %% [markdown]
 # ## abrupt-0p5xCO2
 
@@ -1088,9 +1043,6 @@ f.run()
 
 # save for later
 f.to_netcdf(f"../output/native/{scenario}.nc")
-
-# %%
-pl.plot(f.temperature.sel(layer=0, scenario=scenario));
 
 # %% [markdown]
 # ## esm-pi-CO2pulse
@@ -1161,9 +1113,6 @@ f.run()
 # save for later
 f.to_netcdf(f"../output/native/{scenario}.nc")
 
-# %%
-pl.plot(f.temperature.sel(layer=0, scenario=scenario));
-
 # %% [markdown]
 # ## esm-bell-1000PgC
 
@@ -1232,9 +1181,6 @@ f.run()
 
 # save for later
 f.to_netcdf(f"../output/native/{scenario}.nc")
-
-# %%
-pl.plot(f.temperature.sel(layer=0, scenario=scenario));
 
 # %% [markdown]
 # ## esm-bell-2000PgC
@@ -1305,9 +1251,6 @@ f.run()
 # save for later
 f.to_netcdf(f"../output/native/{scenario}.nc")
 
-# %%
-pl.plot(f.temperature.sel(layer=0, scenario=scenario));
-
 # %% [markdown]
 # ## esm-bell-750PgC
 
@@ -1376,9 +1319,6 @@ f.run()
 
 # save for later
 f.to_netcdf(f"../output/native/{scenario}.nc")
-
-# %%
-pl.plot(f.temperature.sel(layer=0, scenario=scenario));
 
 # %% [markdown]
 # ## historical
@@ -1486,7 +1426,7 @@ f.run()
 f.to_netcdf(f"../output/native/{scenario}.nc")
 
 # %%
-pl.plot(f.temperature.sel(layer=0, scenario=scenario));
+pl.plot((f.alpha_lifetime.sel(specie="CH4", scenario=scenario)) * f.species_configs["unperturbed_lifetime"].sel(specie="CH4", gasbox=0));
 
 # %% [markdown]
 # ## historical-cmip6
