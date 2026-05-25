@@ -2,6 +2,7 @@
 *.zip
 data/v?.?.?
 output/native
+output/pyrcmip
 
 # working files
 data/fair_calibration/v1.6.1/species_configs_properties_master_notcommited.csv

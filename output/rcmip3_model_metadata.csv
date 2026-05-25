@@ -1,0 +1,2 @@
+climate_model,climate_model_name,climate_model_version,climate_model_configuration_label,climate_model_configuration_description,project,name_of_person,literature_reference
+fair-2.2.4_cal-1.6.1,fair,2.2.4,PROB-1.6.1,Calibration developed for RCMIP 3.1.1.7,RCMIP,Chris Smith <c.j.smith1@leeds.ac.uk>,https://doi.org/10.5194/gmd-17-8569-2024
