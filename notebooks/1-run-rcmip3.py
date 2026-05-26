@@ -5,7 +5,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.2
+#       jupytext_version: 1.19.3
 #   kernelspec:
 #     display_name: Python 3 (ipykernel)
 #     language: python
@@ -13,7 +13,7 @@
 # ---
 
 # %% [markdown]
-# # Naively attempt to run rcmip3
+# # Run the rcmip3 protocol in fair and save output in native fair format
 
 # %%
 import copy
@@ -21,7 +21,6 @@ import os
 
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as pl
 import xarray as xr
 
 from fair import FAIR
@@ -7862,9 +7861,6 @@ f.run()
 # save for later
 f.to_netcdf(f"../output/native/{scenario}.nc")
 
-# %%
-pl.plot(f.temperature.sel(layer=0, scenario=scenario));
-
 # %% [markdown]
 # ## esm-flat10-cdr
 
@@ -7933,9 +7929,6 @@ f.run()
 
 # save for later
 f.to_netcdf(f"../output/native/{scenario}.nc")
-
-# %%
-pl.plot(f.temperature.sel(layer=0, scenario=scenario));
 
 # %% [markdown]
 # ## esm-flat10-nz
@@ -8006,9 +7999,6 @@ f.run()
 # save for later
 f.to_netcdf(f"../output/native/{scenario}.nc")
 
-# %%
-pl.plot(f.temperature.sel(layer=0, scenario=scenario));
-
 # %% [markdown]
 # ## esm-flat10-rev
 
@@ -8077,9 +8067,6 @@ f.run()
 
 # save for later
 f.to_netcdf(f"../output/native/{scenario}.nc")
-
-# %%
-pl.plot(f.temperature.sel(layer=0, scenario=scenario));
 
 # %% [markdown]
 # ## esm-flat7.5
@@ -8150,9 +8137,6 @@ f.run()
 # save for later
 f.to_netcdf(f"../output/native/{scenario}.nc")
 
-# %%
-pl.plot(f.temperature.sel(layer=0, scenario=scenario));
-
 # %% [markdown]
 # ## esm-flat7.5-zec
 
@@ -8221,9 +8205,6 @@ f.run()
 
 # save for later
 f.to_netcdf(f"../output/native/{scenario}.nc")
-
-# %%
-pl.plot(f.temperature.sel(layer=0, scenario=scenario));
 
 # %% [markdown]
 # ## esm-flat7.5-cdr
@@ -8294,9 +8275,6 @@ f.run()
 # save for later
 f.to_netcdf(f"../output/native/{scenario}.nc")
 
-# %%
-pl.plot(f.temperature.sel(layer=0, scenario=scenario));
-
 # %% [markdown]
 # ## esm-flat7.5-nz
 
@@ -8365,9 +8343,6 @@ f.run()
 
 # save for later
 f.to_netcdf(f"../output/native/{scenario}.nc")
-
-# %%
-pl.plot(f.temperature.sel(layer=0, scenario=scenario));
 
 # %% [markdown]
 # ## esm-flat7.5-rev
@@ -8438,9 +8413,6 @@ f.run()
 # save for later
 f.to_netcdf(f"../output/native/{scenario}.nc")
 
-# %%
-pl.plot(f.temperature.sel(layer=0, scenario=scenario));
-
 # %% [markdown]
 # ## esm-flat20
 
@@ -8509,9 +8481,6 @@ f.run()
 
 # save for later
 f.to_netcdf(f"../output/native/{scenario}.nc")
-
-# %%
-pl.plot(f.temperature.sel(layer=0, scenario=scenario));
 
 # %% [markdown]
 # ## esm-flat20-zec
@@ -8582,9 +8551,6 @@ f.run()
 # save for later
 f.to_netcdf(f"../output/native/{scenario}.nc")
 
-# %%
-pl.plot(f.temperature.sel(layer=0, scenario=scenario));
-
 # %% [markdown]
 # ## esm-flat20-cdr
 
@@ -8653,9 +8619,6 @@ f.run()
 
 # save for later
 f.to_netcdf(f"../output/native/{scenario}.nc")
-
-# %%
-pl.plot(f.temperature.sel(layer=0, scenario=scenario));
 
 # %% [markdown]
 # ## esm-flat20-nz
@@ -8726,9 +8689,6 @@ f.run()
 # save for later
 f.to_netcdf(f"../output/native/{scenario}.nc")
 
-# %%
-pl.plot(f.temperature.sel(layer=0, scenario=scenario));
-
 # %% [markdown]
 # ## esm-flat20-rev
 
@@ -8797,9 +8757,6 @@ f.run()
 
 # save for later
 f.to_netcdf(f"../output/native/{scenario}.nc")
-
-# %%
-pl.plot(f.temperature.sel(layer=0, scenario=scenario));
 
 # %% [markdown]
 # ## methanemip-TM-allGHG

@@ -24,4 +24,5 @@ rcmip validate --comments rcmip3_model_comments.csv pyrcmip/*.nc rcmip3_model_me
 ```
 
 2. Request a token for upload from Alex Romero-Prieto (see https://pyrcmip.readthedocs.io/en/latest/cli.html#rcmip-upload)
-3. do the upload with `rcmip upload --token TOKEN --model fair --version VERSION --comments rcmip3_model_comments.csv pyrcmip/*.nc rcmip3_model_metadata.csv`
+3. Choose a semantic version for the upload - this will not be the same as the model or the calibration version.
+4. do the upload with `rcmip upload --token TOKEN --model fair --version VERSION --comments rcmip3_model_comments.csv pyrcmip/*.nc rcmip3_model_metadata.csv`
