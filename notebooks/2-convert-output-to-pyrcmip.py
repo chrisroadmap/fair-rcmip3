@@ -5,7 +5,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.2
+#       jupytext_version: 1.19.3
 #   kernelspec:
 #     display_name: Python 3 (ipykernel)
 #     language: python
@@ -14,6 +14,8 @@
 
 # %% [markdown]
 # # Convert output from fair to rcmip format
+#
+# Interpolate all outputs to timepoints
 
 # %%
 import os
@@ -299,107 +301,6 @@ aggregated_forcing_variable_mapping = {
 }
 
 # %%
-# start with purely emissions driven run scenarios as these should be easy
-# piControl
-# esm-piControl
-# esm-allGHG-piControl
-# 1pctCO2
-# 1pctCO2-4xext
-# 1pctCO2-cdr
-# 1pctCO2-bgc
-# 1pctCO2-rad
-# esm-1pct-brch-1000PgC
-# esm-1pct-brch-2000PgC
-# esm-1pct-brch-750PgC
-# abrupt-4xCO2
-# abrupt-2xCO2
-# abrupt-0p5xCO2
-# esm-pi-cdr-pulse
-# esm-pi-CO2pulse
-# esm-bell-1000PgC
-# esm-bell-2000PgC
-# esm-bell-750PgC
-# historical
-# historical-cmip6
-# hist-aer
-# hist-GHG
-# hist-CO2
-# ssp119
-# ssp126
-# ssp245
-# ssp370
-# ssp434
-# ssp460
-# ssp534-over
-# ssp585
-# esm-hist
-# esm-hist-cmip6
-# esm-ssp119
-# esm-ssp126
-# esm-ssp245
-# esm-ssp370
-# esm-ssp434
-# esm-ssp460
-# esm-ssp534-over
-# esm-ssp585
-# esm-allGHG-hist
-# esm-allGHG-hist-cmip6
-# esm-allGHG-ssp119
-# esm-allGHG-ssp126
-# esm-allGHG-ssp245
-# esm-allGHG-ssp370
-# esm-allGHG-ssp370-lowNTCF
-# esm-allGHG-ssp370-lowCH4
-# esm-allGHG-ssp370-lowNTCF-HighCH4
-# esm-allGHG-ssp434
-# esm-allGHG-ssp460
-# esm-allGHG-ssp534-over
-# esm-allGHG-ssp534-over-highCH4
-# esm-allGHG-ssp585
-# esm-allGHG-ssp585-lowCH4
-# esm-scen7-H
-# esm-scen7-HL
-# esm-scen7-M
-# esm-scen7-ML
-# esm-scen7-L
-# esm-scen7-VL
-# esm-scen7-LN
-# scen7-HC
-# scen7-HLC
-# scen7-MC
-# scen7-MLC
-# scen7-LC
-# scen7-VLC
-# scen7-LNC
-# esm-allGHG-scen7-H
-# esm-allGHG-scen7-HL
-# esm-allGHG-scen7-H-CH4L
-# esm-allGHG-scen7-M
-# esm-allGHG-scen7-ML
-# esm-allGHG-scen7-L
-# esm-allGHG-scen7-L-CH4H
-# esm-allGHG-scen7-VL
-# esm-allGHG-scen7-LN
-# esm-flat10
-# esm-flat10-zec
-# esm-flat10-cdr
-# esm-flat10-nz
-# esm-flat10-rev
-# esm-flat7.5
-# esm-flat7.5-cdr
-# esm-flat7.5-zec
-# esm-flat7.5-nz
-# esm-flat7.5-rev
-# esm-flat20
-# esm-flat20-cdr
-# esm-flat20-zec
-# esm-flat20-nz
-# esm-flat20-rev
-# methanemip-TM-allGHG
-# methanemip-TM+BC-allGHG
-
-
-# %%
 run_type = {
     "esm-allGHG-piControl": "idealised",
     "esm-allGHG-hist": "cmip7",
@@ -546,6 +447,9 @@ for scenario in [
     ds_main = xr.load_dataset(f'../output/native/{scenario}.nc')
     ds_life = xr.load_dataset(f'../output/native/{scenario}_lifetimes.nc')
 
+    tp0 = ds_main.timebound[0]+0.5
+    tp1 = ds_main.timebound[-1]
+    
     physics_mapping = {
         "Surface Air Temperature Change": ds_main.temperature.sel(layer=0, scenario=scenario),
         "Heat Content|Ocean": ds_main.ocean_heat_content_change.sel(scenario=scenario) * 0.91 / 1e21,
@@ -560,8 +464,8 @@ for scenario in [
         multi_dimensional_run.extend(
             [
                 ScmRun(
-                    data=physics_mapping[variable],
-                    index=ds_main.timebound,
+                    data=physics_mapping[variable].interp(timebound=np.arange(tp0, tp1)),
+                    index=ds_main.timebound.interp(timebound=np.arange(tp0, tp1)),
                     columns={
                         "variable": variable,
                         "unit": physics_unit_mapping[variable],
@@ -580,8 +484,11 @@ for scenario in [
         multi_dimensional_run.extend(
             [
                 ScmRun(
-                    data=ds_life["__xarray_dataarray_variable__"].sel(specie=variable),
-                    index=ds_life.timebounds,
+                    data=(
+                        ds_life["__xarray_dataarray_variable__"].sel(specie=variable)
+                        .interp(timebounds=np.arange(tp0, tp1))
+                    ),
+                    index=ds_life.timebounds.interp(timebounds=np.arange(tp0, tp1)),
                     columns={
                         "variable": lifetime_variable_mapping[variable],
                         "unit": 'yr',
@@ -602,8 +509,8 @@ for scenario in [
         multi_dimensional_run.extend(
             [
                 ScmRun(
-                    data=ds_main.concentration.sel(scenario=scenario, specie=variable),
-                    index=ds_main.timebound,
+                    data=ds_main.concentration.sel(scenario=scenario, specie=variable).interp(timebound=np.arange(tp0, tp1)),
+                    index=ds_main.timebound.interp(timebound=np.arange(tp0, tp1)),
                     columns={
                         "variable": concentrations_variable_mapping[variable],
                         "unit": concentrations_unit_mapping[variable],
@@ -624,8 +531,8 @@ for scenario in [
         multi_dimensional_run.extend(
             [
                 ScmRun(
-                    data=ds_main.forcing.sel(scenario=scenario, specie=variable),
-                    index=ds_main.timebound,
+                    data=ds_main.forcing.sel(scenario=scenario, specie=variable).interp(timebound=np.arange(tp0, tp1)),
+                    index=ds_main.timebound.interp(timebound=np.arange(tp0, tp1)),
                     columns={
                         "variable": forcing_variable_mapping[variable],
                         "unit": "W/m^2",
@@ -643,8 +550,8 @@ for scenario in [
     multi_dimensional_run.extend(
         [
             ScmRun(
-                data=ds_main.forcing_sum.sel(scenario=scenario),
-                index=ds_main.timebound,
+                data=ds_main.forcing_sum.sel(scenario=scenario).interp(timebound=np.arange(tp0, tp1)),
+                index=ds_main.timebound.interp(timebound=np.arange(tp0, tp1)),
                 columns={
                     "variable": "Effective Radiative Forcing",
                     "unit": "W/m^2",
@@ -667,11 +574,11 @@ for scenario in [
                 ScmRun(
                     data=sum(
                         [
-                            ds_main.forcing.sel(scenario=scenario, specie=variable) 
+                            ds_main.forcing.sel(scenario=scenario, specie=variable).interp(timebound=np.arange(tp0, tp1)) 
                             for variable in aggregated_forcers[category] if variable not in forcing_excludes[run_type[scenario]]
                         ]
                     ),
-                    index=ds_main.timebound,
+                    index=ds_main.timebound.interp(timebound=np.arange(tp0, tp1)),
                     columns={
                         "variable": aggregated_forcing_variable_mapping[category],
                         "unit": "W/m^2",
@@ -696,6 +603,9 @@ scenario = 'hist-aer'
 
 ds_main = xr.load_dataset(f'../output/native/{scenario}.nc')
 
+tp0 = ds_main.timebound[0]+0.5
+tp1 = ds_main.timebound[-1]
+
 physics_mapping = {
     "Surface Air Temperature Change": ds_main.temperature.sel(layer=0, scenario=scenario),
     "Heat Content|Ocean": ds_main.ocean_heat_content_change.sel(scenario=scenario) * 0.91 / 1e21,
@@ -710,8 +620,8 @@ for variable in physics_mapping:
     multi_dimensional_run.extend(
         [
             ScmRun(
-                data=physics_mapping[variable],
-                index=ds_main.timebound,
+                data=physics_mapping[variable].interp(timebound=np.arange(tp0, tp1)),
+                index=ds_main.timebound.interp(timebound=np.arange(tp0, tp1)),
                 columns={
                     "variable": variable,
                     "unit": physics_unit_mapping[variable],
@@ -730,8 +640,8 @@ for variable in ["Aerosol-radiation interactions", "Aerosol-cloud interactions"]
     multi_dimensional_run.extend(
         [
             ScmRun(
-                data=ds_main.forcing.sel(scenario=scenario, specie=variable),
-                index=ds_main.timebound,
+                data=ds_main.forcing.sel(scenario=scenario, specie=variable).interp(timebound=np.arange(tp0, tp1)),
+                index=ds_main.timebound.interp(timebound=np.arange(tp0, tp1)),
                 columns={
                     "variable": forcing_variable_mapping[variable],
                     "unit": "W/m^2",
@@ -749,8 +659,8 @@ for variable in ["Aerosol-radiation interactions", "Aerosol-cloud interactions"]
 multi_dimensional_run.extend(
     [
         ScmRun(
-            data=ds_main.forcing_sum.sel(scenario=scenario),
-            index=ds_main.timebound,
+            data=ds_main.forcing_sum.sel(scenario=scenario).interp(timebound=np.arange(tp0, tp1)),
+            index=ds_main.timebound.interp(timebound=np.arange(tp0, tp1)),
             columns={
                 "variable": "Effective Radiative Forcing",
                 "unit": "W/m^2",
@@ -771,11 +681,11 @@ for category in ["Aerosol"]:
             ScmRun(
                 data=sum(
                     [
-                        ds_main.forcing.sel(scenario=scenario, specie=variable) 
+                        ds_main.forcing.sel(scenario=scenario, specie=variable).interp(timebound=np.arange(tp0, tp1)) 
                         for variable in aggregated_forcers[category]
                     ]
                 ),
-                index=ds_main.timebound,
+                index=ds_main.timebound.interp(timebound=np.arange(tp0, tp1)),
                 columns={
                     "variable": aggregated_forcing_variable_mapping[category],
                     "unit": "W/m^2",
@@ -816,6 +726,9 @@ for scenario in [
     
     ds_main = xr.load_dataset(f'../output/native/{scenario}.nc')
 
+    tp0 = ds_main.timebound[0]+0.5
+    tp1 = ds_main.timebound[-1]
+
     physics_mapping = {
         "Surface Air Temperature Change": ds_main.temperature.sel(layer=0, scenario=scenario),
         "Heat Content|Ocean": ds_main.ocean_heat_content_change.sel(scenario=scenario) * 0.91 / 1e21,
@@ -830,8 +743,8 @@ for scenario in [
         multi_dimensional_run.extend(
             [
                 ScmRun(
-                    data=physics_mapping[variable],
-                    index=ds_main.timebound,
+                    data=physics_mapping[variable].interp(timebound=np.arange(tp0, tp1)),
+                    index=ds_main.timebound.interp(timebound=np.arange(tp0, tp1)),
                     columns={
                         "variable": variable,
                         "unit": physics_unit_mapping[variable],
@@ -870,8 +783,8 @@ for scenario in [
         multi_dimensional_run.extend(
             [
                 ScmRun(
-                    data=ds_main.forcing.sel(scenario=scenario, specie=variable),
-                    index=ds_main.timebound,
+                    data=ds_main.forcing.sel(scenario=scenario, specie=variable).interp(timebound=np.arange(tp0, tp1)),
+                    index=ds_main.timebound.interp(timebound=np.arange(tp0, tp1)),
                     columns={
                         "variable": forcing_variable_mapping[variable],
                         "unit": "W/m^2",
@@ -889,8 +802,8 @@ for scenario in [
     multi_dimensional_run.extend(
         [
             ScmRun(
-                data=ds_main.forcing_sum.sel(scenario=scenario),
-                index=ds_main.timebound,
+                data=ds_main.forcing_sum.sel(scenario=scenario).interp(timebound=np.arange(tp0, tp1)),
+                index=ds_main.timebound.interp(timebound=np.arange(tp0, tp1)),
                 columns={
                     "variable": "Effective Radiative Forcing",
                     "unit": "W/m^2",
@@ -909,8 +822,8 @@ for scenario in [
         multi_dimensional_run.extend(
             [
                 ScmRun(
-                    data=ds_main.forcing.sel(scenario=scenario, specie="CO2"),
-                    index=ds_main.timebound,
+                    data=ds_main.forcing.sel(scenario=scenario, specie="CO2").interp(timebound=np.arange(tp0, tp1)),
+                    index=ds_main.timebound.interp(timebound=np.arange(tp0, tp1)),
                     columns={
                         "variable": aggregated_forcing_variable_mapping[category],
                         "unit": "W/m^2",
@@ -935,6 +848,9 @@ scenario = "hist-GHG"
 
 ds_main = xr.load_dataset(f'../output/native/{scenario}.nc')
 
+tp0 = ds_main.timebound[0]+0.5
+tp1 = ds_main.timebound[-1]
+
 physics_mapping = {
     "Surface Air Temperature Change": ds_main.temperature.sel(layer=0, scenario=scenario),
     "Heat Content|Ocean": ds_main.ocean_heat_content_change.sel(scenario=scenario) * 0.91 / 1e21,
@@ -949,8 +865,8 @@ for variable in physics_mapping:
     multi_dimensional_run.extend(
         [
             ScmRun(
-                data=physics_mapping[variable],
-                index=ds_main.timebound,
+                data=physics_mapping[variable].interp(timebound=np.arange(tp0, tp1)),
+                index=ds_main.timebound.interp(timebound=np.arange(tp0, tp1)),
                 columns={
                     "variable": variable,
                     "unit": physics_unit_mapping[variable],
@@ -989,8 +905,8 @@ for variable in ["CO2", "CH4", "N2O"] + aggregated_forcers["F-Gases"] + aggregat
     multi_dimensional_run.extend(
         [
             ScmRun(
-                data=ds_main.forcing.sel(scenario=scenario, specie=variable),
-                index=ds_main.timebound,
+                data=ds_main.forcing.sel(scenario=scenario, specie=variable).interp(timebound=np.arange(tp0, tp1)),
+                index=ds_main.timebound.interp(timebound=np.arange(tp0, tp1)),
                 columns={
                     "variable": forcing_variable_mapping[variable],
                     "unit": "W/m^2",
@@ -1008,8 +924,8 @@ for variable in ["CO2", "CH4", "N2O"] + aggregated_forcers["F-Gases"] + aggregat
 multi_dimensional_run.extend(
     [
         ScmRun(
-            data=ds_main.forcing_sum.sel(scenario=scenario),
-            index=ds_main.timebound,
+            data=ds_main.forcing_sum.sel(scenario=scenario).interp(timebound=np.arange(tp0, tp1)),
+            index=ds_main.timebound.interp(timebound=np.arange(tp0, tp1)),
             columns={
                 "variable": "Effective Radiative Forcing",
                 "unit": "W/m^2",
@@ -1030,11 +946,11 @@ for category in ["Anthropogenic", "F-Gases", "Montreal Gases", "HFC", "PFC", "CF
             ScmRun(
                 data=sum(
                     [
-                        ds_main.forcing.sel(scenario=scenario, specie=variable) 
+                        ds_main.forcing.sel(scenario=scenario, specie=variable).interp(timebound=np.arange(tp0, tp1)) 
                         for variable in aggregated_forcers[category] if variable not in forcing_excludes['hist-GHG']
                     ]
                 ),
-                index=ds_main.timebound,
+                index=ds_main.timebound.interp(timebound=np.arange(tp0, tp1)),
                 columns={
                     "variable": aggregated_forcing_variable_mapping[category],
                     "unit": "W/m^2",
@@ -1082,6 +998,9 @@ for scenario in [
     "esm-flat20-rev",
 ]:
     ds_main = xr.load_dataset(f'../output/native/{scenario}.nc')
+
+    tp0 = ds_main.timebound[0]+0.5
+    tp1 = ds_main.timebound[-1]
     
     physics_mapping = {
         "Surface Air Temperature Change": ds_main.temperature.sel(layer=0, scenario=scenario),
@@ -1097,8 +1016,8 @@ for scenario in [
         multi_dimensional_run.extend(
             [
                 ScmRun(
-                    data=physics_mapping[variable],
-                    index=ds_main.timebound,
+                    data=physics_mapping[variable].interp(timebound=np.arange(tp0, tp1)),
+                    index=ds_main.timebound.interp(timebound=np.arange(tp0, tp1)),
                     columns={
                         "variable": variable,
                         "unit": physics_unit_mapping[variable],
@@ -1117,8 +1036,8 @@ for scenario in [
         multi_dimensional_run.extend(
             [
                 ScmRun(
-                    data=ds_main.concentration.sel(scenario=scenario, specie=variable),
-                    index=ds_main.timebound,
+                    data=ds_main.concentration.sel(scenario=scenario, specie=variable).interp(timebound=np.arange(tp0, tp1)),
+                    index=ds_main.timebound.interp(timebound=np.arange(tp0, tp1)),
                     columns={
                         "variable": concentrations_variable_mapping[variable],
                         "unit": concentrations_unit_mapping[variable],
@@ -1137,8 +1056,8 @@ for scenario in [
         multi_dimensional_run.extend(
             [
                 ScmRun(
-                    data=ds_main.forcing.sel(scenario=scenario, specie=variable),
-                    index=ds_main.timebound,
+                    data=ds_main.forcing.sel(scenario=scenario, specie=variable).interp(timebound=np.arange(tp0, tp1)),
+                    index=ds_main.timebound.interp(timebound=np.arange(tp0, tp1)),
                     columns={
                         "variable": forcing_variable_mapping[variable],
                         "unit": "W/m^2",
@@ -1156,8 +1075,8 @@ for scenario in [
     multi_dimensional_run.extend(
         [
             ScmRun(
-                data=ds_main.forcing_sum.sel(scenario=scenario),
-                index=ds_main.timebound,
+                data=ds_main.forcing_sum.sel(scenario=scenario).interp(timebound=np.arange(tp0, tp1)),
+                index=ds_main.timebound.interp(timebound=np.arange(tp0, tp1)),
                 columns={
                     "variable": "Effective Radiative Forcing",
                     "unit": "W/m^2",
@@ -1176,8 +1095,8 @@ for scenario in [
         multi_dimensional_run.extend(
             [
                 ScmRun(
-                    data=ds_main.forcing.sel(scenario=scenario, specie="CO2"),
-                    index=ds_main.timebound,
+                    data=ds_main.forcing.sel(scenario=scenario, specie="CO2").interp(timebound=np.arange(tp0, tp1)),
+                    index=ds_main.timebound.interp(timebound=np.arange(tp0, tp1)),
                     columns={
                         "variable": aggregated_forcing_variable_mapping[category],
                         "unit": "W/m^2",
@@ -1236,6 +1155,9 @@ for scenario in [
 ]:
     ds_main = xr.load_dataset(f'../output/native/{scenario}.nc')
 
+    tp0 = ds_main.timebound[0]+0.5
+    tp1 = ds_main.timebound[-1]
+
     physics_mapping = {
         "Surface Air Temperature Change": ds_main.temperature.sel(layer=0, scenario=scenario),
         "Heat Content|Ocean": ds_main.ocean_heat_content_change.sel(scenario=scenario) * 0.91 / 1e21,
@@ -1250,8 +1172,8 @@ for scenario in [
         multi_dimensional_run.extend(
             [
                 ScmRun(
-                    data=physics_mapping[variable],
-                    index=ds_main.timebound,
+                    data=physics_mapping[variable].interp(timebound=np.arange(tp0, tp1)),
+                    index=ds_main.timebound.interp(timebound=np.arange(tp0, tp1)),
                     columns={
                         "variable": variable,
                         "unit": physics_unit_mapping[variable],
@@ -1271,8 +1193,8 @@ for scenario in [
         multi_dimensional_run.extend(
             [
                 ScmRun(
-                    data=ds_life["__xarray_dataarray_variable__"].sel(specie=variable),
-                    index=ds_life.timebounds,
+                    data=ds_life["__xarray_dataarray_variable__"].sel(specie=variable).interp(timebounds=np.arange(tp0, tp1)),
+                    index=ds_life.timebounds.interp(timebounds=np.arange(tp0, tp1)),
                     columns={
                         "variable": lifetime_variable_mapping[variable],
                         "unit": 'yr',
@@ -1293,8 +1215,8 @@ for scenario in [
         multi_dimensional_run.extend(
             [
                 ScmRun(
-                    data=ds_main.concentration.sel(scenario=scenario, specie=variable),
-                    index=ds_main.timebound,
+                    data=ds_main.concentration.sel(scenario=scenario, specie=variable).interp(timebound=np.arange(tp0, tp1)),
+                    index=ds_main.timebound.interp(timebound=np.arange(tp0, tp1)),
                     columns={
                         "variable": concentrations_variable_mapping[variable],
                         "unit": concentrations_unit_mapping[variable],
@@ -1337,8 +1259,8 @@ for scenario in [
         multi_dimensional_run.extend(
             [
                 ScmRun(
-                    data=ds_main.forcing.sel(scenario=scenario, specie=variable),
-                    index=ds_main.timebound,
+                    data=ds_main.forcing.sel(scenario=scenario, specie=variable).interp(timebound=np.arange(tp0, tp1)),
+                    index=ds_main.timebound.interp(timebound=np.arange(tp0, tp1)),
                     columns={
                         "variable": forcing_variable_mapping[variable],
                         "unit": "W/m^2",
@@ -1356,8 +1278,8 @@ for scenario in [
     multi_dimensional_run.extend(
         [
             ScmRun(
-                data=ds_main.forcing_sum.sel(scenario=scenario),
-                index=ds_main.timebound,
+                data=ds_main.forcing_sum.sel(scenario=scenario).interp(timebound=np.arange(tp0, tp1)),
+                index=ds_main.timebound.interp(timebound=np.arange(tp0, tp1)),
                 columns={
                     "variable": "Effective Radiative Forcing",
                     "unit": "W/m^2",
@@ -1380,11 +1302,11 @@ for scenario in [
                 ScmRun(
                     data=sum(
                         [
-                            ds_main.forcing.sel(scenario=scenario, specie=variable) 
+                            ds_main.forcing.sel(scenario=scenario, specie=variable).interp(timebound=np.arange(tp0, tp1)) 
                             for variable in aggregated_forcers[category] if variable not in forcing_excludes[run_type[scenario]]
                         ]
                     ),
-                    index=ds_main.timebound,
+                    index=ds_main.timebound.interp(timebound=np.arange(tp0, tp1)),
                     columns={
                         "variable": aggregated_forcing_variable_mapping[category],
                         "unit": "W/m^2",
